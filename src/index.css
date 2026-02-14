@@ -1,0 +1,56 @@
+:root {
+  --bg-darkest: #1a1a2e;
+  --bg-dark: #22223a;
+  --bg-panel: #282845;
+  --bg-panel-alt: #2e2e4a;
+  --bg-hover: #35355a;
+  --bg-active: #3d3d6b;
+  --border: #3a3a5c;
+  --border-light: #4a4a6e;
+  --text-primary: #e0e0f0;
+  --text-secondary: #9999bb;
+  --text-muted: #6a6a8a;
+  --accent: #4a7aff;
+  --accent-hover: #5a8aff;
+  --canvas-bg: #e8e8e8;
+  --timeline-header: #1e1e36;
+  --toolbar-width: 40px;
+  --inspector-width: 240px;
+  --timeline-height: 200px;
+  --timeline-layer-width: 160px;
+  --header-height: 32px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-darkest);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

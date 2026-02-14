@@ -1,0 +1,78 @@
+/** A single Konva node serialized via toJSON(), plus our stable ID. */
+export interface FlickObject {
+  /** Stable unique identifier that persists across frames/edits. */
+  id: string
+  /** Konva node class name, e.g. "Rect", "Circle", "Path", "Group". */
+  className: string
+  /** The attrs blob from Konva's toJSON(). Contains x, y, fill, etc. */
+  attrs: Record<string, unknown>
+}
+
+/** A snapshot of a layer's contents at a specific frame. */
+export interface Keyframe {
+  /** 1-based frame number. */
+  frame: number
+  /** All objects visible on this layer at this keyframe. */
+  objects: FlickObject[]
+}
+
+/** A named layer containing keyframed content. */
+export interface Layer {
+  id: string
+  name: string
+  visible: boolean
+  locked: boolean
+  keyframes: Keyframe[]
+}
+
+/** Top-level project. */
+export interface Project {
+  name: string
+  frameRate: number
+  width: number
+  height: number
+  layers: Layer[]
+}
+
+// ── Helpers ──
+
+let _nextId = 1
+
+export function generateId(): string {
+  return `obj_${Date.now()}_${_nextId++}`
+}
+
+export function createProject(name = 'Untitled'): Project {
+  return {
+    name,
+    frameRate: 24,
+    width: 1920,
+    height: 1080,
+    layers: [createLayer('Layer 1')],
+  }
+}
+
+export function createLayer(name: string): Layer {
+  return {
+    id: generateId(),
+    name,
+    visible: true,
+    locked: false,
+    keyframes: [{ frame: 1, objects: [] }],
+  }
+}
+
+/**
+ * Resolve which keyframe is active for a layer at a given frame.
+ * Returns the keyframe with the highest frame number <= the target frame,
+ * or undefined if the layer has no keyframes at or before that frame.
+ */
+export function getActiveKeyframe(layer: Layer, frame: number): Keyframe | undefined {
+  let best: Keyframe | undefined
+  for (const kf of layer.keyframes) {
+    if (kf.frame <= frame && (!best || kf.frame > best.frame)) {
+      best = kf
+    }
+  }
+  return best
+}
