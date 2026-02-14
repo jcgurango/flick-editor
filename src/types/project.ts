@@ -1,10 +1,10 @@
-/** A single Konva node serialized via toJSON(), plus our stable ID. */
+/** A single drawable object on the canvas. */
 export interface FlickObject {
   /** Stable unique identifier that persists across frames/edits. */
   id: string
-  /** Konva node class name, e.g. "Rect", "Circle", "Path", "Group". */
-  className: string
-  /** The attrs blob from Konva's toJSON(). Contains x, y, fill, etc. */
+  /** Object type, e.g. "rect", "ellipse", "path", "line", "group". */
+  type: string
+  /** SVG-relevant attributes: x, y, width, height, fill, stroke, d, etc. */
   attrs: Record<string, unknown>
 }
 

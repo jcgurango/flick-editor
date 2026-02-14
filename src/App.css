@@ -101,6 +101,10 @@
   overflow: hidden;
 }
 
+.canvas-svg {
+  display: block;
+}
+
 /* ── Inspector ── */
 .inspector {
   width: var(--inspector-width);
@@ -266,6 +270,9 @@
   flex: 1;
   overflow-x: auto;
   overflow-y: auto;
+  position: relative;
+  user-select: none;
+  cursor: pointer;
 }
 
 .timeline-frame-numbers {
@@ -319,22 +326,47 @@
   background: var(--bg-hover);
 }
 
-.timeline-frame-cell.has-content {
+/* Keyframe cell: solid dot indicator */
+.timeline-frame-cell.keyframe {
   background: var(--bg-active);
+  position: relative;
 }
 
-.timeline-frame-cell.has-content:hover {
-  background: var(--accent);
+.timeline-frame-cell.keyframe::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
 }
 
+/* Held frame: lighter fill to show content extends */
+.timeline-frame-cell.held {
+  background: var(--bg-panel-alt);
+}
+
+/* Current frame highlight */
 .timeline-frame-cell.current {
   background: rgba(74, 122, 255, 0.2);
 }
 
-.timeline-frame-cell.current.has-content {
+.timeline-frame-cell.current.keyframe {
   background: var(--accent);
 }
 
+.timeline-frame-cell.current.keyframe::after {
+  background: #fff;
+}
+
+.timeline-frame-cell.current.held {
+  background: rgba(74, 122, 255, 0.35);
+}
+
+/* Playhead line */
 .timeline-playhead {
   position: absolute;
   top: 0;
@@ -343,4 +375,13 @@
   background: var(--accent);
   pointer-events: none;
   z-index: 2;
+}
+
+/* Frame display in toolbar */
+.timeline-frame-display {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 60px;
+  text-align: center;
 }
