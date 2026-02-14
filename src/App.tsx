@@ -1,8 +1,14 @@
-import { useState } from 'react'
-import { Stage, Layer as KonvaLayer } from 'react-konva'
+import { useState, useRef, useCallback, useLayoutEffect } from 'react'
+import { Stage, Layer as KonvaLayer, Rect } from 'react-konva'
+import type Konva from 'konva'
 import { createProject, createLayer } from './types/project'
 import type { Project } from './types/project'
 import './App.css'
+
+const ZOOM_SENSITIVITY = 1.1
+const MIN_ZOOM = 0.05
+const MAX_ZOOM = 10
+const FIT_PADDING = 40
 
 const TOOLS = [
   { id: 'select', icon: '⊹', label: 'Select' },
@@ -33,6 +39,108 @@ function App() {
   })
   const [currentFrame, setCurrentFrame] = useState(1)
   const [activeLayerId, setActiveLayerId] = useState(project.layers[0].id)
+
+  // Canvas zoom/pan state
+  const canvasAreaRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<Konva.Stage>(null)
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const isPanningRef = useRef(false)
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+
+  // Measure container and compute initial zoom-to-fit
+  useLayoutEffect(() => {
+    const el = canvasAreaRef.current
+    if (!el) return
+
+    const measure = () => {
+      const { clientWidth, clientHeight } = el
+      setStageSize({ width: clientWidth, height: clientHeight })
+
+      const scaleX = (clientWidth - FIT_PADDING * 2) / project.width
+      const scaleY = (clientHeight - FIT_PADDING * 2) / project.height
+      const fitZoom = Math.min(scaleX, scaleY)
+      setZoom(fitZoom)
+      setPan({
+        x: (clientWidth - project.width * fitZoom) / 2,
+        y: (clientHeight - project.height * fitZoom) / 2,
+      })
+    }
+
+    measure()
+
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+    // Only run on mount — we don't want resize to reset a user's zoom/pan
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Mousewheel zoom (centered on pointer)
+  const handleWheel = useCallback(
+    (e: Konva.KonvaEventObject<WheelEvent>) => {
+      e.evt.preventDefault()
+      const stage = stageRef.current
+      if (!stage) return
+
+      const pointer = stage.getPointerPosition()
+      if (!pointer) return
+
+      const direction = e.evt.deltaY < 0 ? 1 : -1
+      const factor = direction > 0 ? ZOOM_SENSITIVITY : 1 / ZOOM_SENSITIVITY
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor))
+
+      // Zoom toward pointer position
+      const mouseX = pointer.x
+      const mouseY = pointer.y
+      const newPanX = mouseX - ((mouseX - pan.x) / zoom) * newZoom
+      const newPanY = mouseY - ((mouseY - pan.y) / zoom) * newZoom
+
+      setZoom(newZoom)
+      setPan({ x: newPanX, y: newPanY })
+    },
+    [zoom, pan],
+  )
+
+  // Shift+Drag pan
+  const handleMouseDown = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (!e.evt.shiftKey) return
+      e.evt.preventDefault()
+      isPanningRef.current = true
+      panStartRef.current = {
+        x: e.evt.clientX,
+        y: e.evt.clientY,
+        panX: pan.x,
+        panY: pan.y,
+      }
+      // Change cursor
+      const container = stageRef.current?.container()
+      if (container) container.style.cursor = 'grabbing'
+    },
+    [pan],
+  )
+
+  const handleMouseMove = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (!isPanningRef.current) return
+      const dx = e.evt.clientX - panStartRef.current.x
+      const dy = e.evt.clientY - panStartRef.current.y
+      setPan({
+        x: panStartRef.current.panX + dx,
+        y: panStartRef.current.panY + dy,
+      })
+    },
+    [],
+  )
+
+  const handleMouseUp = useCallback(() => {
+    if (!isPanningRef.current) return
+    isPanningRef.current = false
+    const container = stageRef.current?.container()
+    if (container) container.style.cursor = ''
+  }, [])
 
   return (
     <div className="app">
@@ -70,22 +178,46 @@ function App() {
         </div>
 
         {/* Canvas */}
-        <div className="canvas-area">
-          <div className="canvas-container" style={{ width: project.width, height: project.height }}>
-            <Stage width={project.width} height={project.height}>
+        <div className="canvas-area" ref={canvasAreaRef}>
+          {stageSize.width > 0 && (
+            <Stage
+              ref={stageRef}
+              width={stageSize.width}
+              height={stageSize.height}
+              scaleX={zoom}
+              scaleY={zoom}
+              x={pan.x}
+              y={pan.y}
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+            >
+              {/* Canvas background (the white "stage" rectangle) */}
+              <KonvaLayer>
+                <Rect
+                  x={0}
+                  y={0}
+                  width={project.width}
+                  height={project.height}
+                  fill="#e8e8e8"
+                  shadowColor="rgba(0,0,0,0.4)"
+                  shadowBlur={20}
+                  shadowOffsetY={4}
+                />
+              </KonvaLayer>
+              {/* Content layers */}
               {project.layers
                 .filter((l) => l.visible)
                 .slice()
                 .reverse()
-                .map((layer) => {
-                  return (
-                    <KonvaLayer key={layer.id}>
-                      {/* Objects will be rendered here from keyframe data */}
-                    </KonvaLayer>
-                  )
-                })}
+                .map((layer) => (
+                  <KonvaLayer key={layer.id}>
+                    {/* Objects will be rendered here from keyframe data */}
+                  </KonvaLayer>
+                ))}
             </Stage>
-          </div>
+          )}
         </div>
 
         {/* Inspector */}
