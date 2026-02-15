@@ -33,8 +33,8 @@ export function dragAttrs(
       }
     case 'path':
       return {
-        translateX: (attrs.translateX as number ?? 0) + dx,
-        translateY: (attrs.translateY as number ?? 0) + dy,
+        x: (attrs.x as number ?? 0) + dx,
+        y: (attrs.y as number ?? 0) + dy,
       }
     default:
       return {}
@@ -58,12 +58,10 @@ export function computeRotationAttrs(
   newRotation: number,
 ): Record<string, unknown> {
   const oldRotation = (attrs.rotation as number) ?? 0
-  const ox = (attrs.originX as number) ?? 0.5
-  const oy = (attrs.originY as number) ?? 0.5
 
-  // Object's rotation origin in pre-rotation (= world) space
-  const oX = bbox.x + bbox.width * ox
-  const oY = bbox.y + bbox.height * oy
+  // Object's rotation origin = center of bbox
+  const oX = bbox.x + bbox.width * 0.5
+  const oY = bbox.y + bbox.height * 0.5
 
   // Pivot's world-space offset from origin
   const pDx = pivotWorld[0] - oX
@@ -173,9 +171,9 @@ export function computeScale(
   let anchorFracX: number, anchorFracY: number
 
   if (shiftKey) {
-    // Anchor = origin
-    anchorFracX = (attrs.originX as number) ?? 0.5
-    anchorFracY = (attrs.originY as number) ?? 0.5
+    // Anchor = center
+    anchorFracX = 0.5
+    anchorFracY = 0.5
   } else {
     // Anchor = opposite side
     // If dragging right, anchor left (0). If dragging left, anchor right (1). If edge (no L/R), anchor center (0.5).
@@ -184,10 +182,9 @@ export function computeScale(
   }
 
   // 4. Compute anchor's world position using OLD bbox
-  const originPctX = (attrs.originX as number) ?? 0.5
-  const originPctY = (attrs.originY as number) ?? 0.5
-  const oldOriginX = bbox.x + bbox.width * originPctX
-  const oldOriginY = bbox.y + bbox.height * originPctY
+  // Origin is always at center (0.5, 0.5)
+  const oldOriginX = bbox.x + bbox.width * 0.5
+  const oldOriginY = bbox.y + bbox.height * 0.5
   const oldAnchorX = bbox.x + bbox.width * anchorFracX
   const oldAnchorY = bbox.y + bbox.height * anchorFracY
 
@@ -200,19 +197,12 @@ export function computeScale(
   const anchorWorldY = oldOriginY + oldDax * sin + oldDay * cos
 
   // 5. Solve for new position
-  // New anchor displacement from new origin:
-  // newOrigin = (newX + newW * originPctX, newY + newH * originPctY)
-  // newAnchor = (newX + newW * anchorFracX, newY + newH * anchorFracY)
-  // newDax = newW * (anchorFracX - originPctX)
-  // newDay = newH * (anchorFracY - originPctY)
-  const newDax = newW * (anchorFracX - originPctX)
-  const newDay = newH * (anchorFracY - originPctY)
+  const newDax = newW * (anchorFracX - 0.5)
+  const newDay = newH * (anchorFracY - 0.5)
 
   // We need: newOrigin + rotate(newDa) = anchorWorld
-  // newOriginX + newDax * cos - newDay * sin = anchorWorldX
-  // (newX + newW * originPctX) + newDax * cos - newDay * sin = anchorWorldX
-  const newX = anchorWorldX - newW * originPctX - newDax * cos + newDay * sin
-  const newY = anchorWorldY - newH * originPctY - newDax * sin - newDay * cos
+  const newX = anchorWorldX - newW * 0.5 - newDax * cos + newDay * sin
+  const newY = anchorWorldY - newH * 0.5 - newDax * sin - newDay * cos
 
   // 6. Apply per object type
   return applyNewBBox(type, attrs, { x: newX, y: newY, width: newW, height: newH })
@@ -257,10 +247,14 @@ function applyNewBBox(
       const intrinsic = pathIntrinsicBBox(d)
       if (!intrinsic || intrinsic.width === 0 || intrinsic.height === 0) return {}
 
-      // Rewrite all path coordinates so the intrinsic bbox matches newBBox
-      // This folds any existing translate into the path and resets it to 0
-      const newD = scalePath(d, intrinsic, newBBox)
-      return { d: newD, translateX: 0, translateY: 0 }
+      // Scale d to new dimensions, keeping it centered at local (0,0)
+      const newD = scalePath(d, intrinsic, {
+        x: -newBBox.width / 2,
+        y: -newBBox.height / 2,
+        width: newBBox.width,
+        height: newBBox.height,
+      })
+      return { d: newD, x: newBBox.x + newBBox.width / 2, y: newBBox.y + newBBox.height / 2 }
     }
 
     default:
@@ -334,4 +328,22 @@ function scalePath(d: string, oldBBox: BBox, newBBox: BBox): string {
   }
 
   return parts.join(' ')
+}
+
+/**
+ * Recenter a path d string so its intrinsic bbox is centered at local (0,0).
+ * Returns the recentered d string and the world position of the center.
+ */
+export function recenterPath(d: string): { d: string; x: number; y: number } {
+  const intrinsic = pathIntrinsicBBox(d)
+  if (!intrinsic || intrinsic.width === 0 || intrinsic.height === 0) return { d, x: 0, y: 0 }
+  const cx = intrinsic.x + intrinsic.width / 2
+  const cy = intrinsic.y + intrinsic.height / 2
+  const newD = scalePath(d, intrinsic, {
+    x: -intrinsic.width / 2,
+    y: -intrinsic.height / 2,
+    width: intrinsic.width,
+    height: intrinsic.height,
+  })
+  return { d: newD, x: cx, y: cy }
 }

@@ -21,10 +21,6 @@ const STYLE_FIELDS: FieldDef[] = [
 ]
 
 const ROTATION_FIELD: FieldDef = { key: 'rotation', label: 'Rotation', type: 'number' }
-const ORIGIN_FIELDS: FieldDef[] = [
-  { key: 'originX', label: 'Origin X', type: 'number', min: 0, max: 1, step: 0.01 },
-  { key: 'originY', label: 'Origin Y', type: 'number', min: 0, max: 1, step: 0.01 },
-]
 
 export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
   rect: [
@@ -33,7 +29,7 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
     { key: 'height', label: 'Height', type: 'number', min: 0 },
     { key: 'rx', label: 'Radius', type: 'number', min: 0 },
     ROTATION_FIELD,
-    ...ORIGIN_FIELDS,
+
     ...STYLE_FIELDS,
   ],
   circle: [
@@ -41,7 +37,7 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
     { key: 'cy', label: 'Y', type: 'number' },
     { key: 'r', label: 'Radius', type: 'number', min: 0 },
     ROTATION_FIELD,
-    ...ORIGIN_FIELDS,
+
     ...STYLE_FIELDS,
   ],
   ellipse: [
@@ -50,7 +46,7 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
     { key: 'rx', label: 'Radius X', type: 'number', min: 0 },
     { key: 'ry', label: 'Radius Y', type: 'number', min: 0 },
     ROTATION_FIELD,
-    ...ORIGIN_FIELDS,
+
     ...STYLE_FIELDS,
   ],
   line: [
@@ -61,10 +57,9 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
     ...STYLE_FIELDS,
   ],
   path: [
-    { key: 'translateX', label: 'Offset X', type: 'number' },
-    { key: 'translateY', label: 'Offset Y', type: 'number' },
+    ...POSITION_FIELDS,
     ROTATION_FIELD,
-    ...ORIGIN_FIELDS,
+
     ...STYLE_FIELDS,
   ],
 }

@@ -36,12 +36,12 @@ export function computeBBox(obj: FlickObject): BBox | null {
     case 'path': {
       const d = obj.attrs.d as string | undefined
       if (!d) return null
-      const tx = a.translateX ?? 0, ty = a.translateY ?? 0
+      const px = a.x ?? 0, py = a.y ?? 0
       const intrinsic = pathIntrinsicBBox(d)
       if (!intrinsic) return null
       return {
-        x: intrinsic.x + tx,
-        y: intrinsic.y + ty,
+        x: intrinsic.x + px,
+        y: intrinsic.y + py,
         width: intrinsic.width,
         height: intrinsic.height,
       }
@@ -52,12 +52,9 @@ export function computeBBox(obj: FlickObject): BBox | null {
   }
 }
 
-/** Compute absolute origin coordinates from percentage-based origin + bounding box. */
-export function absoluteOrigin(obj: FlickObject, bbox: BBox): Point {
-  const a = obj.attrs as Record<string, number>
-  const ox = a.originX ?? 0.5
-  const oy = a.originY ?? 0.5
-  return [bbox.x + bbox.width * ox, bbox.y + bbox.height * oy]
+/** Compute the center of a bounding box (used as the rotation/transform origin). */
+export function absoluteOrigin(_obj: FlickObject, bbox: BBox): Point {
+  return [bbox.x + bbox.width * 0.5, bbox.y + bbox.height * 0.5]
 }
 
 /** Get the 4 corners of a bounding box after rotation around an origin. */

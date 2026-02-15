@@ -13,15 +13,10 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
 
   // Extract non-SVG attrs
   const {
-    rotation, originX: _ox, originY: _oy,
-    translateX, translateY,
-    ...svgAttrs
+    rotation,
+    ...restAttrs
   } = obj.attrs as Record<string, unknown> & {
     rotation?: number
-    originX?: number
-    originY?: number
-    translateX?: number
-    translateY?: number
   }
 
   // Build transform chain (applied in SVG order: leftmost = outermost)
@@ -37,9 +32,16 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
     }
   }
 
-  // Translation
-  if (translateX || translateY) {
-    transforms.push(`translate(${translateX ?? 0}, ${translateY ?? 0})`)
+  // For paths, x/y is position (rendered as translate), not a native SVG attr
+  let svgAttrs: Record<string, unknown> = restAttrs
+  if (type === 'path') {
+    const { x, y, ...pathAttrs } = restAttrs as Record<string, unknown> & { x?: number; y?: number }
+    svgAttrs = pathAttrs
+    const px = (x as number) ?? 0
+    const py = (y as number) ?? 0
+    if (px || py) {
+      transforms.push(`translate(${px}, ${py})`)
+    }
   }
 
   const transform = transforms.length > 0 ? transforms.join(' ') : undefined

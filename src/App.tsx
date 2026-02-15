@@ -57,6 +57,7 @@ function getFrameType(layer: Layer, frame: number): 'keyframe' | 'tweened' | 'he
 }
 
 function App() {
+  console.log(useStore())
   const project = useStore((s) => s.project)
   const currentFrame = useStore((s) => s.currentFrame)
   const setCurrentFrame = useStore((s) => s.setCurrentFrame)
