@@ -24,6 +24,8 @@ interface EditorState {
   setActiveLayerId: (id: string) => void
   selectedKeyframe: SelectedKeyframe | null
   setSelectedKeyframe: (kf: SelectedKeyframe | null) => void
+  selectedObjectId: string | null
+  setSelectedObjectId: (id: string | null) => void
 
   // Viewport
   zoom: number
@@ -36,6 +38,7 @@ interface EditorState {
   // Actions
   setKeyframeTween: (layerId: string, frame: number, tween: TweenType) => void
   setKeyframeEaseDirection: (layerId: string, frame: number, easeDirection: EaseDirection) => void
+  updateObjectAttrs: (layerId: string, frame: number, objectId: string, attrs: Record<string, unknown>) => void
 }
 
 function createDemoProject(): Project {
@@ -46,13 +49,13 @@ function createDemoProject(): Project {
   p.layers[0].keyframes = [
     {
       frame: 1,
-      tween: 'linear',
+      tween: 'smooth',
       easeDirection: 'in-out',
       objects: [
         {
           id: rectId,
           type: 'rect',
-          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 15, rx: 20, rotation: 0, originX: 300, originY: 275 },
+          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 15, rx: 20, rotation: 0 },
         },
         {
           id: rectId2,
@@ -69,7 +72,7 @@ function createDemoProject(): Project {
         {
           id: rectId,
           type: 'rect',
-          attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4, rotation: 45, originX: 1000, originY: 525 },
+          attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4, rotation: 45 },
         },
         {
           id: rectId2,
@@ -132,7 +135,8 @@ function createDemoProject(): Project {
   p.layers.push(createLayer('Layer'))
   p.layers.push(createLayer('Layer'))
   p.layers.push(createLayer('Layer'))
-  p.layers.push(createLayer('Background'))
+  p.layers.push(createLayer('Layer'))
+  p.layers.push(createLayer('Layer'))
 
   return p
 }
@@ -183,6 +187,8 @@ export const useStore = create<EditorState>((set) => ({
   setActiveLayerId: (activeLayerId) => set({ activeLayerId }),
   selectedKeyframe: null,
   setSelectedKeyframe: (selectedKeyframe) => set({ selectedKeyframe }),
+  selectedObjectId: null,
+  setSelectedObjectId: (selectedObjectId) => set({ selectedObjectId }),
 
   zoom: 1,
   setZoom: (zoom) => set({ zoom }),
@@ -219,6 +225,32 @@ export const useStore = create<EditorState>((set) => ({
                 ...layer,
                 keyframes: layer.keyframes.map((kf) =>
                   kf.frame !== frame ? kf : { ...kf, easeDirection },
+                ),
+              },
+        ),
+      },
+    })),
+
+  updateObjectAttrs: (layerId, frame, objectId, attrs) =>
+    set((state) => ({
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId
+            ? layer
+            : {
+                ...layer,
+                keyframes: layer.keyframes.map((kf) =>
+                  kf.frame !== frame
+                    ? kf
+                    : {
+                        ...kf,
+                        objects: kf.objects.map((obj) =>
+                          obj.id !== objectId
+                            ? obj
+                            : { ...obj, attrs: { ...obj.attrs, ...attrs } },
+                        ),
+                      },
                 ),
               },
         ),

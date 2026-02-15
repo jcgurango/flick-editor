@@ -3,7 +3,11 @@ import { useStore } from './store'
 import { getActiveKeyframe, getNextKeyframe } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
+import { dragAttrs, computeScale } from './lib/transform'
+import { computeBBox } from './lib/bbox'
+import type { HandleId } from './components/BoundingBox'
 import { SvgObject } from './components/SvgObject'
+import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
 import './App.css'
 
@@ -67,16 +71,37 @@ function App() {
   const setContainerSize = useStore((s) => s.setContainerSize)
   const isPlaying = useStore((s) => s.isPlaying)
   const togglePlayback = useStore((s) => s.togglePlayback)
+  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
 
-  // Space key shortcut for play/pause
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
       if (e.code === 'Space' && !e.repeat) {
-        // Don't trigger if user is typing in an input
-        const tag = (e.target as HTMLElement).tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
         e.preventDefault()
         togglePlayback()
+        return
+      }
+
+      // Arrow key nudge
+      const s = useStore.getState()
+      if (s.selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault()
+        const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+        const dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+
+        // Find the object's layer and keyframe
+        const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+        const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
+        const obj = kf?.objects.find((o) => o.id === s.selectedObjectId)
+        if (layer && kf && obj) {
+          const newAttrs = dragAttrs(obj.type, obj.attrs, dx, dy)
+          s.updateObjectAttrs(layer.id, kf.frame, obj.id, newAttrs)
+        }
       }
     }
     document.addEventListener('keydown', handleKeyDown)
@@ -87,6 +112,17 @@ function App() {
   const canvasAreaRef = useRef<HTMLDivElement>(null)
   const isPanningRef = useRef(false)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+
+  // Drag refs
+  const isDraggingRef = useRef(false)
+  const dragStartRef = useRef({ x: 0, y: 0 })
+  const dragObjRef = useRef<{ id: string; layerId: string; type: string; attrs: Record<string, unknown> } | null>(null)
+
+  // Scale refs
+  const isScalingRef = useRef(false)
+  const scaleStartRef = useRef({ x: 0, y: 0 })
+  const scaleHandleRef = useRef<HandleId>('corner-tl')
+  const scaleObjRef = useRef<{ id: string; layerId: string; type: string; attrs: Record<string, unknown> } | null>(null)
 
   // Timeline scrub
   const isScrubbing = useRef(false)
@@ -156,19 +192,55 @@ function App() {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
-      if (!isPanningRef.current) return
-      setPan({
-        x: panStartRef.current.panX + e.clientX - panStartRef.current.x,
-        y: panStartRef.current.panY + e.clientY - panStartRef.current.y,
-      })
+      if (isPanningRef.current) {
+        setPan({
+          x: panStartRef.current.panX + e.clientX - panStartRef.current.x,
+          y: panStartRef.current.panY + e.clientY - panStartRef.current.y,
+        })
+        return
+      }
+
+      if (isDraggingRef.current && dragObjRef.current) {
+        const s = useStore.getState()
+        const dx = (e.clientX - dragStartRef.current.x) / s.zoom
+        const dy = (e.clientY - dragStartRef.current.y) / s.zoom
+        const { id, layerId, type, attrs } = dragObjRef.current
+        const newAttrs = dragAttrs(type, attrs, dx, dy)
+        s.updateObjectAttrs(layerId, s.currentFrame, id, newAttrs)
+        dragStartRef.current = { x: e.clientX, y: e.clientY }
+        dragObjRef.current = { ...dragObjRef.current, attrs: { ...attrs, ...newAttrs } }
+        return
+      }
+
+      if (isScalingRef.current && scaleObjRef.current) {
+        const s = useStore.getState()
+        const dx = (e.clientX - scaleStartRef.current.x) / s.zoom
+        const dy = (e.clientY - scaleStartRef.current.y) / s.zoom
+        const { id, layerId, type, attrs } = scaleObjRef.current
+        const bbox = computeBBox({ id, type, attrs })
+        if (!bbox) return
+        const rotation = (attrs.rotation as number) ?? 0
+        const newAttrs = computeScale(
+          type, attrs, bbox, scaleHandleRef.current,
+          dx, dy, rotation, e.shiftKey, e.ctrlKey,
+        )
+        s.updateObjectAttrs(layerId, s.currentFrame, id, newAttrs)
+        scaleStartRef.current = { x: e.clientX, y: e.clientY }
+        scaleObjRef.current = { ...scaleObjRef.current, attrs: { ...attrs, ...newAttrs } }
+      }
     },
     [setPan],
   )
 
   const handleMouseUp = useCallback(() => {
-    if (!isPanningRef.current) return
-    isPanningRef.current = false
-    canvasAreaRef.current!.style.cursor = ''
+    if (isPanningRef.current) {
+      isPanningRef.current = false
+      canvasAreaRef.current!.style.cursor = ''
+    }
+    isDraggingRef.current = false
+    dragObjRef.current = null
+    isScalingRef.current = false
+    scaleObjRef.current = null
   }, [])
 
   // Timeline scrubbing
@@ -285,6 +357,7 @@ function App() {
                   height={project.height}
                   fill="#e8e8e8"
                   filter="url(#canvas-shadow)"
+                  onClick={() => setSelectedObjectId(null)}
                 />
 
                 <g clipPath="url(#canvas-clip)">
@@ -294,15 +367,67 @@ function App() {
                     .reverse()
                     .map((layer) => {
                       const objects = resolveFrame(layer, currentFrame)
+                      const isOnKeyframe = layer.keyframes.some((kf) => kf.frame === currentFrame)
                       return (
                         <g key={layer.id} data-layer-id={layer.id}>
                           {objects.map((obj) => (
-                            <SvgObject key={obj.id} obj={obj} />
+                            <SvgObject
+                              key={obj.id}
+                              obj={obj}
+                              onClick={(e) => {
+                                if (!isOnKeyframe) return
+                                e.stopPropagation()
+                                setSelectedObjectId(obj.id)
+                                setActiveLayerId(layer.id)
+                                setSelectedKeyframe(null)
+                              }}
+                              onMouseDown={(e) => {
+                                if (!isOnKeyframe || e.shiftKey) return
+                                // Find the keyframe object (not interpolated) for editing
+                                const kf = layer.keyframes.find((k) => k.frame === currentFrame)
+                                const kfObj = kf?.objects.find((o) => o.id === obj.id)
+                                if (!kfObj) return
+                                e.stopPropagation()
+                                isDraggingRef.current = true
+                                dragStartRef.current = { x: e.clientX, y: e.clientY }
+                                dragObjRef.current = { id: obj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                                setSelectedObjectId(obj.id)
+                                setActiveLayerId(layer.id)
+                                setSelectedKeyframe(null)
+                              }}
+                            />
                           ))}
                         </g>
                       )
                     })}
                 </g>
+
+                {/* Bounding box for selected object */}
+                {selectedObjectId && (() => {
+                  const selObj = project.layers
+                    .filter((l) => l.visible)
+                    .flatMap((l) => resolveFrame(l, currentFrame))
+                    .find((o) => o.id === selectedObjectId)
+                  if (!selObj) return null
+                  return (
+                    <BoundingBox
+                      obj={selObj}
+                      zoom={zoom}
+                      onHandleMouseDown={(handle, e) => {
+                        e.stopPropagation()
+                        // Find the keyframe object for editing
+                        const layer = project.layers.find((l) => l.id === activeLayerId)
+                        const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                        const kfObj = kf?.objects.find((o) => o.id === selectedObjectId)
+                        if (!layer || !kf || !kfObj) return
+                        isScalingRef.current = true
+                        scaleStartRef.current = { x: e.clientX, y: e.clientY }
+                        scaleHandleRef.current = handle
+                        scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                      }}
+                    />
+                  )
+                })()}
               </g>
             </svg>
           )}
