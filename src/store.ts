@@ -52,7 +52,7 @@ function createDemoProject(): Project {
         {
           id: rectId,
           type: 'rect',
-          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 15, rx: 20 },
+          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 15, rx: 20, rotation: 0, originX: 300, originY: 275 },
         },
         {
           id: rectId2,
@@ -69,7 +69,7 @@ function createDemoProject(): Project {
         {
           id: rectId,
           type: 'rect',
-          attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4 },
+          attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4, rotation: 45, originX: 1000, originY: 525 },
         },
         {
           id: rectId2,
