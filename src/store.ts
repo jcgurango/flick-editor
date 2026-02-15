@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
-import type { Project, TweenType, EaseDirection, FlickObject } from './types/project'
+import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject } from './types/project'
 import { recenterPath } from './lib/transform'
 
 export interface SelectedKeyframe {
@@ -8,10 +8,23 @@ export interface SelectedKeyframe {
   frame: number
 }
 
+const MAX_UNDO = 100
+
 interface EditorState {
   // Project
   project: Project
   setProject: (project: Project) => void
+
+  // Undo/Redo
+  _undoStack: Project[]
+  _redoStack: Project[]
+  undo: () => void
+  redo: () => void
+
+  // Clipboard
+  clipboard: FlickObject[]
+  copySelectedObjects: () => void
+  pasteObjects: () => void
 
   // Playback
   currentFrame: number
@@ -150,9 +163,87 @@ function createDemoProject(): Project {
 
 const initialProject = createDemoProject()
 
+/** Push current project onto undo stack, clear redo. */
+function pushUndo(state: EditorState): Partial<EditorState> {
+  const stack = state._undoStack.length >= MAX_UNDO
+    ? state._undoStack.slice(1)
+    : state._undoStack
+  return { _undoStack: [...stack, state.project], _redoStack: [] }
+}
+
 export const useStore = create<EditorState>((set) => ({
   project: initialProject,
   setProject: (project) => set({ project }),
+
+  // Undo/Redo
+  _undoStack: [],
+  _redoStack: [],
+  undo: () =>
+    set((state) => {
+      if (state._undoStack.length === 0) return state
+      const prev = state._undoStack[state._undoStack.length - 1]
+      return {
+        _undoStack: state._undoStack.slice(0, -1),
+        _redoStack: [...state._redoStack, state.project],
+        project: prev,
+      }
+    }),
+  redo: () =>
+    set((state) => {
+      if (state._redoStack.length === 0) return state
+      const next = state._redoStack[state._redoStack.length - 1]
+      return {
+        _redoStack: state._redoStack.slice(0, -1),
+        _undoStack: [...state._undoStack, state.project],
+        project: next,
+      }
+    }),
+
+  // Clipboard
+  clipboard: [],
+  copySelectedObjects: () => {
+    const s = useStore.getState()
+    const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+    const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
+    if (!kf) return
+    const objs = kf.objects.filter((o) => s.selectedObjectIds.includes(o.id))
+    if (objs.length === 0) return
+    // Deep clone
+    set({ clipboard: JSON.parse(JSON.stringify(objs)) })
+  },
+  pasteObjects: () => {
+    const s: EditorState = useStore.getState()
+    if (s.clipboard.length === 0) return
+    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    const kf = layer?.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!layer || !kf) return
+
+    const existingIds = new Set(kf.objects.map((o: FlickObject) => o.id))
+    const pasted: FlickObject[] = s.clipboard.map((obj: FlickObject) => {
+      const clone: FlickObject = JSON.parse(JSON.stringify(obj))
+      if (existingIds.has(clone.id)) {
+        clone.id = generateId()
+      }
+      return clone
+    })
+
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) =>
+        l.id !== layer.id ? l : {
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            k.frame !== kf.frame ? k : { ...k, objects: [...k.objects, ...pasted] },
+          ),
+        },
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+      selectedObjectIds: pasted.map((o: FlickObject) => o.id),
+    })
+  },
 
   currentFrame: 1,
   setCurrentFrame: (currentFrame) => set({ currentFrame }),
@@ -161,12 +252,11 @@ export const useStore = create<EditorState>((set) => ({
   togglePlayback: () => {
     const state = useStore.getState()
     if (state.isPlaying) {
-      // Stop
       if (state._playRafId !== null) cancelAnimationFrame(state._playRafId)
       set({ isPlaying: false, _playRafId: null })
     } else {
       const frameDuration = 1000 / state.project.frameRate
-      const maxFrame = 60 // TODO: derive from project content
+      const maxFrame = 60
       const startTime = Date.now()
       const startFrame = state.currentFrame
 
@@ -215,6 +305,7 @@ export const useStore = create<EditorState>((set) => ({
 
   setKeyframeTween: (layerId, frame, tween) =>
     set((state) => ({
+      ...pushUndo(state),
       project: {
         ...state.project,
         layers: state.project.layers.map((layer) =>
@@ -232,6 +323,7 @@ export const useStore = create<EditorState>((set) => ({
 
   setKeyframeEaseDirection: (layerId, frame, easeDirection) =>
     set((state) => ({
+      ...pushUndo(state),
       project: {
         ...state.project,
         layers: state.project.layers.map((layer) =>
@@ -249,6 +341,7 @@ export const useStore = create<EditorState>((set) => ({
 
   updateObjectAttrs: (layerId, frame, objectId, attrs) =>
     set((state) => ({
+      ...pushUndo(state),
       project: {
         ...state.project,
         layers: state.project.layers.map((layer) =>
@@ -275,6 +368,7 @@ export const useStore = create<EditorState>((set) => ({
 
   addObjectToKeyframe: (layerId, frame, object) =>
     set((state) => ({
+      ...pushUndo(state),
       project: {
         ...state.project,
         layers: state.project.layers.map((layer) =>
@@ -291,4 +385,5 @@ export const useStore = create<EditorState>((set) => ({
         ),
       },
     })),
+
 }))

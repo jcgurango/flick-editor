@@ -79,6 +79,8 @@ function App() {
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const setSelectedObjectIds = useStore((s) => s.setSelectedObjectIds)
   const toggleSelectedObjectId = useStore((s) => s.toggleSelectedObjectId)
+  // Drag preview: a ghost object shown during dragging (not yet committed)
+  const [dragPreview, setDragPreview] = useState<FlickObject | null>(null)
   // Scale preview: a ghost object shown during scaling (not yet committed)
   const [scalePreview, setScalePreview] = useState<FlickObject | null>(null)
   // Draw preview: shape being drawn with rect/ellipse tool
@@ -95,6 +97,30 @@ function App() {
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         togglePlayback()
+        return
+      }
+
+      // Undo/Redo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        useStore.getState().undo()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        useStore.getState().redo()
+        return
+      }
+
+      // Copy/Paste
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        e.preventDefault()
+        useStore.getState().copySelectedObjects()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault()
+        useStore.getState().pasteObjects()
         return
       }
 
@@ -262,13 +288,13 @@ function App() {
 
       if (isDraggingRef.current && dragObjRef.current) {
         const s = useStore.getState()
+        // Total delta from drag start (not incremental)
         const dx = (e.clientX - dragStartRef.current.x) / s.zoom
         const dy = (e.clientY - dragStartRef.current.y) / s.zoom
-        const { id, layerId, type, attrs } = dragObjRef.current
+        const { id, type, attrs } = dragObjRef.current
         const newAttrs = dragAttrs(type, attrs, dx, dy)
-        s.updateObjectAttrs(layerId, s.currentFrame, id, newAttrs)
-        dragStartRef.current = { x: e.clientX, y: e.clientY }
-        dragObjRef.current = { ...dragObjRef.current, attrs: { ...attrs, ...newAttrs } }
+        // Don't commit — store as preview
+        setDragPreview({ id, type, attrs: { ...attrs, ...newAttrs } })
         return
       }
 
@@ -415,8 +441,22 @@ function App() {
       isPanningRef.current = false
       canvasAreaRef.current!.style.cursor = ''
     }
+    // Commit drag preview on mouseup
+    if (isDraggingRef.current && dragPreview && dragObjRef.current) {
+      const s = useStore.getState()
+      const { layerId } = dragObjRef.current
+      const original = dragObjRef.current.attrs
+      const changed: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(dragPreview.attrs)) {
+        if (v !== original[k]) changed[k] = v
+      }
+      if (Object.keys(changed).length > 0) {
+        s.updateObjectAttrs(layerId, s.currentFrame, dragPreview.id, changed)
+      }
+    }
     isDraggingRef.current = false
     dragObjRef.current = null
+    setDragPreview(null)
 
     // Box select
     if (isBoxSelectingRef.current) {
@@ -504,7 +544,7 @@ function App() {
     }
     isDrawingRef.current = false
     setDrawPreview(null)
-  }, [scalePreview, drawPreview, boxSelectRect])
+  }, [dragPreview, scalePreview, drawPreview, boxSelectRect])
 
   // Timeline scrubbing
   const scrubToX = useCallback(
@@ -675,6 +715,13 @@ function App() {
                     })}
                 </g>
 
+                {/* Drag preview ghost */}
+                {dragPreview && (
+                  <g opacity={0.4}>
+                    <SvgObject obj={dragPreview} />
+                  </g>
+                )}
+
                 {/* Scale preview ghost */}
                 {scalePreview && (
                   <g opacity={0.4}>
@@ -712,10 +759,12 @@ function App() {
                   const singleSelected = selectedObjectIds.length === 1
 
                   return selectedObjectIds.map((selId) => {
-                    // During scaling, show bbox around preview for the scaled object
-                    const selObj = (scalePreview && scalePreview.id === selId)
-                      ? scalePreview
-                      : allObjects.find((o) => o.id === selId)
+                    // During drag/scale, show bbox around preview
+                    const selObj = (dragPreview && dragPreview.id === selId)
+                      ? dragPreview
+                      : (scalePreview && scalePreview.id === selId)
+                        ? scalePreview
+                        : allObjects.find((o) => o.id === selId)
                     if (!selObj) return null
                     return (
                       <BoundingBox
