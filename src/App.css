@@ -105,60 +105,6 @@
   display: block;
 }
 
-/* ── Inspector ── */
-.inspector {
-  width: var(--inspector-width);
-  background: var(--bg-panel);
-  border-left: 1px solid var(--border);
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.inspector-section {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 12px;
-}
-
-.inspector-section-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-}
-
-.inspector-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.inspector-label {
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.inspector-input {
-  width: 70px;
-  height: 22px;
-  background: var(--bg-dark);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-primary);
-  padding: 0 6px;
-  font-size: 11px;
-  font-family: inherit;
-}
-
-.inspector-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 /* ── Timeline ── */
 .timeline {
   height: var(--timeline-height);
@@ -316,6 +262,7 @@
   flex-shrink: 0;
   border-right: 1px solid rgba(58, 58, 92, 0.4);
   cursor: pointer;
+  position: relative;
 }
 
 .timeline-frame-cell.fifth {
@@ -349,6 +296,35 @@
   background: var(--bg-panel-alt);
 }
 
+/* Tweened frame: distinct tint to show interpolation */
+.timeline-frame-cell.tweened {
+  background: rgba(74, 122, 255, 0.12);
+}
+
+.timeline-frame-cell.tweened::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.5;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+}
+
+/* Selected keyframe highlight */
+.timeline-frame-cell.selected {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+.timeline-frame-cell.selected::after {
+  background: var(--accent);
+}
+
 /* Current frame highlight */
 .timeline-frame-cell.current {
   background: rgba(74, 122, 255, 0.2);
@@ -364,6 +340,10 @@
 
 .timeline-frame-cell.current.held {
   background: rgba(74, 122, 255, 0.35);
+}
+
+.timeline-frame-cell.current.tweened {
+  background: rgba(74, 122, 255, 0.3);
 }
 
 /* Playhead line */

@@ -1,3 +1,6 @@
+export type TweenType = 'discrete' | 'linear' | 'smooth' | 'cubic' | 'exponential' | 'circular' | 'elastic' | 'bounce'
+export type EaseDirection = 'in' | 'out' | 'in-out'
+
 /** A single drawable object on the canvas. */
 export interface FlickObject {
   /** Stable unique identifier that persists across frames/edits. */
@@ -14,6 +17,10 @@ export interface Keyframe {
   frame: number
   /** All objects visible on this layer at this keyframe. */
   objects: FlickObject[]
+  /** How to interpolate from this keyframe toward the next. */
+  tween: TweenType
+  /** Ease direction for the tween. */
+  easeDirection: EaseDirection
 }
 
 /** A named layer containing keyframed content. */
@@ -45,7 +52,7 @@ export function generateId(): string {
 export function createProject(name = 'Untitled'): Project {
   return {
     name,
-    frameRate: 24,
+    frameRate: 30,
     width: 1920,
     height: 1080,
     layers: [createLayer('Layer 1')],
@@ -58,7 +65,7 @@ export function createLayer(name: string): Layer {
     name,
     visible: true,
     locked: false,
-    keyframes: [{ frame: 1, objects: [] }],
+    keyframes: [{ frame: 1, objects: [], tween: 'discrete', easeDirection: 'in-out' }],
   }
 }
 
@@ -71,6 +78,19 @@ export function getActiveKeyframe(layer: Layer, frame: number): Keyframe | undef
   let best: Keyframe | undefined
   for (const kf of layer.keyframes) {
     if (kf.frame <= frame && (!best || kf.frame > best.frame)) {
+      best = kf
+    }
+  }
+  return best
+}
+
+/**
+ * Get the next keyframe after the given frame on a layer.
+ */
+export function getNextKeyframe(layer: Layer, frame: number): Keyframe | undefined {
+  let best: Keyframe | undefined
+  for (const kf of layer.keyframes) {
+    if (kf.frame > frame && (!best || kf.frame < best.frame)) {
       best = kf
     }
   }

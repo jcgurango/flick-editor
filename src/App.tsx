@@ -1,7 +1,10 @@
-import { useState, useRef, useCallback, useLayoutEffect } from 'react'
-import { createProject, createLayer, getActiveKeyframe, generateId } from './types/project'
-import type { Project, Layer } from './types/project'
+import { useRef, useCallback, useLayoutEffect, useEffect } from 'react'
+import { useStore } from './store'
+import { getActiveKeyframe, getNextKeyframe } from './types/project'
+import type { Layer } from './types/project'
+import { resolveFrame } from './lib/interpolate'
 import { SvgObject } from './components/SvgObject'
+import { Inspector } from './components/Inspector'
 import './App.css'
 
 const ZOOM_SENSITIVITY = 1.1
@@ -29,87 +32,65 @@ const TOOLS = [
 
 const FRAME_COUNT = 60
 
-/** Build a demo project with test keyframe data. */
-function createDemoProject(): Project {
-  const p = createProject('My Animation')
-  const rectId = generateId()
-
-  // Layer 1: a rect that moves and resizes between frame 1 and frame 15
-  p.layers[0].keyframes = [
-    {
-      frame: 1,
-      objects: [
-        {
-          id: rectId,
-          type: 'rect',
-          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
-        },
-      ],
-    },
-    {
-      frame: 15,
-      objects: [
-        {
-          id: rectId,
-          type: 'rect',
-          attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4 },
-        },
-      ],
-    },
-  ]
-
-  // Layer 2: a circle sitting still
-  const layer2 = createLayer('Layer 2')
-  const circleId = generateId()
-  layer2.keyframes = [
-    {
-      frame: 1,
-      objects: [
-        {
-          id: circleId,
-          type: 'circle',
-          attrs: { cx: 1400, cy: 300, r: 80, fill: '#44cc88', stroke: '#228855', strokeWidth: 2 },
-        },
-      ],
-    },
-  ]
-  p.layers.push(layer2)
-
-  // Background layer: empty
-  p.layers.push(createLayer('Background'))
-
-  return p
-}
-
 /**
- * For a given layer & frame number, determine the "span" type of that frame:
- * - 'keyframe': this frame has a keyframe
- * - 'held': this frame is between two keyframes (or after the last keyframe), content is held
- * - 'empty': before the first keyframe
+ * Determine the display type of a frame cell in the timeline.
  */
-function getFrameType(layer: Layer, frame: number): 'keyframe' | 'held' | 'empty' {
+function getFrameType(layer: Layer, frame: number): 'keyframe' | 'tweened' | 'held' | 'empty' {
   for (const kf of layer.keyframes) {
     if (kf.frame === frame) return 'keyframe'
   }
   const active = getActiveKeyframe(layer, frame)
-  return active ? 'held' : 'empty'
+  if (!active) return 'empty'
+
+  // Check if the active keyframe has a non-discrete tween and there's a next keyframe
+  if (active.tween !== 'discrete') {
+    const next = getNextKeyframe(layer, active.frame)
+    if (next && frame < next.frame) return 'tweened'
+  }
+
+  return 'held'
 }
 
 function App() {
-  const [project, _setProject] = useState<Project>(createDemoProject)
-  const [currentFrame, setCurrentFrame] = useState(1)
-  const [activeLayerId, setActiveLayerId] = useState(project.layers[0].id)
+  const project = useStore((s) => s.project)
+  const currentFrame = useStore((s) => s.currentFrame)
+  const setCurrentFrame = useStore((s) => s.setCurrentFrame)
+  const activeLayerId = useStore((s) => s.activeLayerId)
+  const setActiveLayerId = useStore((s) => s.setActiveLayerId)
+  const selectedKeyframe = useStore((s) => s.selectedKeyframe)
+  const setSelectedKeyframe = useStore((s) => s.setSelectedKeyframe)
+  const zoom = useStore((s) => s.zoom)
+  const setZoom = useStore((s) => s.setZoom)
+  const pan = useStore((s) => s.pan)
+  const setPan = useStore((s) => s.setPan)
+  const containerSize = useStore((s) => s.containerSize)
+  const setContainerSize = useStore((s) => s.setContainerSize)
+  const isPlaying = useStore((s) => s.isPlaying)
+  const togglePlayback = useStore((s) => s.togglePlayback)
 
-  // Canvas zoom/pan state
+  // Space key shortcut for play/pause
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        // Don't trigger if user is typing in an input
+        const tag = (e.target as HTMLElement).tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        e.preventDefault()
+        togglePlayback()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [togglePlayback])
+
+  // Canvas refs
   const canvasAreaRef = useRef<HTMLDivElement>(null)
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
   const isPanningRef = useRef(false)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
 
-  // Timeline scrub state
+  // Timeline scrub
   const isScrubbing = useRef(false)
+  const scrubWrapperRef = useRef<HTMLDivElement>(null)
 
   // Measure container and compute initial zoom-to-fit
   useLayoutEffect(() => {
@@ -138,11 +119,10 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Mousewheel zoom (centered on pointer)
+  // Mousewheel zoom
   const handleWheel = useCallback(
     (e: React.WheelEvent<SVGSVGElement>) => {
       e.preventDefault()
-
       const svg = e.currentTarget
       const rect = svg.getBoundingClientRect()
       const mouseX = e.clientX - rect.left
@@ -158,7 +138,7 @@ function App() {
       setZoom(newZoom)
       setPan({ x: newPanX, y: newPanY })
     },
-    [zoom, pan],
+    [zoom, pan, setZoom, setPan],
   )
 
   // Shift+Drag pan
@@ -167,12 +147,7 @@ function App() {
       if (!e.shiftKey) return
       e.preventDefault()
       isPanningRef.current = true
-      panStartRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        panX: pan.x,
-        panY: pan.y,
-      }
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
       canvasAreaRef.current!.style.cursor = 'grabbing'
     },
     [pan],
@@ -181,14 +156,12 @@ function App() {
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
       if (!isPanningRef.current) return
-      const dx = e.clientX - panStartRef.current.x
-      const dy = e.clientY - panStartRef.current.y
       setPan({
-        x: panStartRef.current.panX + dx,
-        y: panStartRef.current.panY + dy,
+        x: panStartRef.current.panX + e.clientX - panStartRef.current.x,
+        y: panStartRef.current.panY + e.clientY - panStartRef.current.y,
       })
     },
-    [],
+    [setPan],
   )
 
   const handleMouseUp = useCallback(() => {
@@ -197,34 +170,54 @@ function App() {
     canvasAreaRef.current!.style.cursor = ''
   }, [])
 
-  // Timeline scrubbing: track the wrapper element so document-level handlers can use it
-  const scrubWrapperRef = useRef<HTMLDivElement>(null)
+  // Timeline scrubbing
+  const scrubToX = useCallback(
+    (clientX: number) => {
+      const wrapper = scrubWrapperRef.current
+      if (!wrapper) return
+      const rect = wrapper.getBoundingClientRect()
+      const x = clientX - rect.left + wrapper.scrollLeft
+      const frame = Math.max(1, Math.min(FRAME_COUNT, Math.floor(x / 16) + 1))
+      setCurrentFrame(frame)
+    },
+    [setCurrentFrame],
+  )
 
-  const scrubToX = useCallback((clientX: number) => {
-    const wrapper = scrubWrapperRef.current
-    if (!wrapper) return
-    const rect = wrapper.getBoundingClientRect()
-    const x = clientX - rect.left + wrapper.scrollLeft
-    const frame = Math.max(1, Math.min(FRAME_COUNT, Math.floor(x / 16) + 1))
-    setCurrentFrame(frame)
-  }, [])
+  const handleScrubDown = useCallback(
+    (e: React.MouseEvent) => {
+      isScrubbing.current = true
+      setSelectedKeyframe(null)
+      scrubToX(e.clientX)
 
-  const handleScrubDown = useCallback((e: React.MouseEvent) => {
-    isScrubbing.current = true
-    scrubToX(e.clientX)
+      const onMove = (ev: MouseEvent) => {
+        if (!isScrubbing.current) return
+        scrubToX(ev.clientX)
+      }
+      const onUp = () => {
+        isScrubbing.current = false
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [scrubToX, setSelectedKeyframe],
+  )
 
-    const onMove = (ev: MouseEvent) => {
-      if (!isScrubbing.current) return
-      scrubToX(ev.clientX)
-    }
-    const onUp = () => {
-      isScrubbing.current = false
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [scrubToX])
+  // Keyframe cell click — select keyframe if it's a keyframe cell
+  const handleCellClick = useCallback(
+    (layerId: string, frame: number, isKeyframe: boolean, e: React.MouseEvent) => {
+      e.stopPropagation()
+      if (isKeyframe) {
+        setSelectedKeyframe({ layerId, frame })
+        setCurrentFrame(frame)
+      } else {
+        setSelectedKeyframe(null)
+        setCurrentFrame(frame)
+      }
+    },
+    [setSelectedKeyframe, setCurrentFrame],
+  )
 
   return (
     <div className="app">
@@ -284,7 +277,6 @@ function App() {
               </defs>
 
               <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-                {/* Canvas background */}
                 <rect
                   x={0}
                   y={0}
@@ -294,17 +286,16 @@ function App() {
                   filter="url(#canvas-shadow)"
                 />
 
-                {/* Content layers (reversed so first layer renders on top) */}
                 <g clipPath="url(#canvas-clip)">
                   {project.layers
                     .filter((l) => l.visible)
                     .slice()
                     .reverse()
                     .map((layer) => {
-                      const kf = getActiveKeyframe(layer, currentFrame)
+                      const objects = resolveFrame(layer, currentFrame)
                       return (
                         <g key={layer.id} data-layer-id={layer.id}>
-                          {kf?.objects.map((obj) => (
+                          {objects.map((obj) => (
                             <SvgObject key={obj.id} obj={obj} />
                           ))}
                         </g>
@@ -317,67 +308,7 @@ function App() {
         </div>
 
         {/* Inspector */}
-        <div className="inspector">
-          <div className="inspector-section">
-            <div className="inspector-section-title">Properties</div>
-            <div className="inspector-row">
-              <span className="inspector-label">X</span>
-              <input className="inspector-input" type="text" defaultValue="0" />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">Y</span>
-              <input className="inspector-input" type="text" defaultValue="0" />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">W</span>
-              <input className="inspector-input" type="text" defaultValue="100" />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">H</span>
-              <input className="inspector-input" type="text" defaultValue="100" />
-            </div>
-          </div>
-
-          <div className="inspector-section">
-            <div className="inspector-section-title">Fill</div>
-            <div className="inspector-row">
-              <span className="inspector-label">Color</span>
-              <input className="inspector-input" type="text" defaultValue="#000000" />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">Opacity</span>
-              <input className="inspector-input" type="text" defaultValue="100%" />
-            </div>
-          </div>
-
-          <div className="inspector-section">
-            <div className="inspector-section-title">Stroke</div>
-            <div className="inspector-row">
-              <span className="inspector-label">Color</span>
-              <input className="inspector-input" type="text" defaultValue="#000000" />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">Width</span>
-              <input className="inspector-input" type="text" defaultValue="1" />
-            </div>
-          </div>
-
-          <div className="inspector-section">
-            <div className="inspector-section-title">Scene</div>
-            <div className="inspector-row">
-              <span className="inspector-label">FPS</span>
-              <input className="inspector-input" type="text" defaultValue={String(project.frameRate)} />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">Width</span>
-              <input className="inspector-input" type="text" defaultValue={String(project.width)} />
-            </div>
-            <div className="inspector-row">
-              <span className="inspector-label">Height</span>
-              <input className="inspector-input" type="text" defaultValue={String(project.height)} />
-            </div>
-          </div>
-        </div>
+        <Inspector />
       </div>
 
       {/* Timeline */}
@@ -387,7 +318,9 @@ function App() {
           <button className="timeline-btn" title="Delete Layer">−</button>
           <div style={{ flex: 1 }} />
           <button className="timeline-btn" title="Previous Frame">⏮</button>
-          <button className="timeline-btn" title="Play">▶</button>
+          <button className="timeline-btn" title={isPlaying ? 'Pause' : 'Play'} onClick={togglePlayback}>
+            {isPlaying ? '⏸' : '▶'}
+          </button>
           <button className="timeline-btn" title="Next Frame">⏭</button>
           <div style={{ flex: 1 }} />
           <span className="timeline-frame-display">Frame {currentFrame}</span>
@@ -441,16 +374,24 @@ function App() {
                   {Array.from({ length: FRAME_COUNT }, (_, i) => {
                     const frameNum = i + 1
                     const frameType = getFrameType(layer, frameNum)
+                    const isKf = frameType === 'keyframe'
+                    const isSelected =
+                      isKf &&
+                      selectedKeyframe?.layerId === layer.id &&
+                      selectedKeyframe?.frame === frameNum
                     return (
                       <div
                         key={i}
                         className={[
                           'timeline-frame-cell',
-                          (frameNum) % 5 === 0 && 'fifth',
-                          frameType === 'keyframe' && 'keyframe',
-                          frameType === 'held' && 'held',
+                          frameNum % 5 === 0 && 'fifth',
+                          frameType,
                           frameNum === currentFrame && 'current',
-                        ].filter(Boolean).join(' ')}
+                          isSelected && 'selected',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onClick={(e) => handleCellClick(layer.id, frameNum, isKf, e)}
                       />
                     )
                   })}
