@@ -209,17 +209,81 @@ function applyNewBBox(
       const intrinsic = pathIntrinsicBBox(d)
       if (!intrinsic || intrinsic.width === 0 || intrinsic.height === 0) return {}
 
-      // Derive scaleX/Y and translateX/Y from the desired bbox
-      // rendered: x = intrinsic.x * sx + tx, width = intrinsic.width * sx
-      const sx = newBBox.width / intrinsic.width
-      const sy = newBBox.height / intrinsic.height
-      const tx = newBBox.x - intrinsic.x * sx
-      const ty = newBBox.y - intrinsic.y * sy
-
-      return { scaleX: sx, scaleY: sy, translateX: tx, translateY: ty }
+      // Rewrite all path coordinates so the intrinsic bbox matches newBBox
+      // This folds any existing translate into the path and resets it to 0
+      const newD = scalePath(d, intrinsic, newBBox)
+      return { d: newD, translateX: 0, translateY: 0 }
     }
 
     default:
       return {}
   }
+}
+
+// ── Path coordinate rewriting ──
+
+const CMD_RE = /([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g
+const NUM_RE = /-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi
+
+/**
+ * Transform all coordinates in a path d string so its intrinsic bbox
+ * maps from oldBBox to newBBox. Preserves command structure.
+ */
+function scalePath(d: string, oldBBox: BBox, newBBox: BBox): string {
+  const sx = oldBBox.width > 0 ? newBBox.width / oldBBox.width : 1
+  const sy = oldBBox.height > 0 ? newBBox.height / oldBBox.height : 1
+
+  const absX = (v: number) => newBBox.x + (v - oldBBox.x) * sx
+  const absY = (v: number) => newBBox.y + (v - oldBBox.y) * sy
+  const relX = (v: number) => v * sx
+  const relY = (v: number) => v * sy
+
+  const fmt = (n: number) => {
+    const r = Math.round(n * 1000) / 1000
+    return r === Math.floor(r) ? String(r) : r.toFixed(3).replace(/0+$/, '')
+  }
+
+  const parts: string[] = []
+
+  for (const match of d.matchAll(CMD_RE)) {
+    const type = match[1]
+    const args = match[2].match(NUM_RE)?.map(Number) ?? []
+    const isRel = type === type.toLowerCase()
+    const abs = type.toUpperCase()
+    const tx = isRel ? relX : absX
+    const ty = isRel ? relY : absY
+
+    const out: number[] = []
+
+    switch (abs) {
+      case 'M': case 'L': case 'T':
+        for (let i = 0; i < args.length; i += 2)
+          out.push(tx(args[i]), ty(args[i + 1]))
+        break
+      case 'H':
+        for (const a of args) out.push(tx(a))
+        break
+      case 'V':
+        for (const a of args) out.push(ty(a))
+        break
+      case 'C':
+        for (let i = 0; i < args.length; i += 6)
+          out.push(tx(args[i]), ty(args[i+1]), tx(args[i+2]), ty(args[i+3]), tx(args[i+4]), ty(args[i+5]))
+        break
+      case 'S': case 'Q':
+        for (let i = 0; i < args.length; i += 4)
+          out.push(tx(args[i]), ty(args[i+1]), tx(args[i+2]), ty(args[i+3]))
+        break
+      case 'A':
+        for (let i = 0; i < args.length; i += 7)
+          out.push(args[i] * sx, args[i+1] * sy, args[i+2], args[i+3], args[i+4], tx(args[i+5]), ty(args[i+6]))
+        break
+      case 'Z':
+        break
+    }
+
+    parts.push(type + (out.length > 0 ? out.map(fmt).join(',') : ''))
+  }
+
+  return parts.join(' ')
 }

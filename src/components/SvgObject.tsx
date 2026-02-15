@@ -15,7 +15,6 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
   const {
     rotation, originX: _ox, originY: _oy,
     translateX, translateY,
-    scaleX, scaleY,
     ...svgAttrs
   } = obj.attrs as Record<string, unknown> & {
     rotation?: number
@@ -23,8 +22,6 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
     originY?: number
     translateX?: number
     translateY?: number
-    scaleX?: number
-    scaleY?: number
   }
 
   // Build transform chain (applied in SVG order: leftmost = outermost)
@@ -43,13 +40,6 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
   // Translation
   if (translateX || translateY) {
     transforms.push(`translate(${translateX ?? 0}, ${translateY ?? 0})`)
-  }
-
-  // Scale (for paths)
-  const sx = scaleX as number | undefined
-  const sy = scaleY as number | undefined
-  if (sx != null && sy != null && (sx !== 1 || sy !== 1)) {
-    transforms.push(`scale(${sx}, ${sy})`)
   }
 
   const transform = transforms.length > 0 ? transforms.join(' ') : undefined

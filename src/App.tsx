@@ -1,4 +1,4 @@
-import { useRef, useCallback, useLayoutEffect, useEffect } from 'react'
+import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
 import { useStore } from './store'
 import { getActiveKeyframe, getNextKeyframe } from './types/project'
 import type { Layer } from './types/project'
@@ -6,6 +6,7 @@ import { resolveFrame } from './lib/interpolate'
 import { dragAttrs, computeScale } from './lib/transform'
 import { computeBBox } from './lib/bbox'
 import type { HandleId } from './components/BoundingBox'
+import type { FlickObject } from './types/project'
 import { SvgObject } from './components/SvgObject'
 import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
@@ -73,7 +74,8 @@ function App() {
   const togglePlayback = useStore((s) => s.togglePlayback)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
-
+  // Scale preview: a ghost object shown during scaling (not yet committed)
+  const [scalePreview, setScalePreview] = useState<FlickObject | null>(null)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -214,9 +216,10 @@ function App() {
 
       if (isScalingRef.current && scaleObjRef.current) {
         const s = useStore.getState()
+        // Total delta from drag start (not incremental)
         const dx = (e.clientX - scaleStartRef.current.x) / s.zoom
         const dy = (e.clientY - scaleStartRef.current.y) / s.zoom
-        const { id, layerId, type, attrs } = scaleObjRef.current
+        const { id, type, attrs } = scaleObjRef.current
         const bbox = computeBBox({ id, type, attrs })
         if (!bbox) return
         const rotation = (attrs.rotation as number) ?? 0
@@ -224,9 +227,8 @@ function App() {
           type, attrs, bbox, scaleHandleRef.current,
           dx, dy, rotation, e.shiftKey, e.ctrlKey,
         )
-        s.updateObjectAttrs(layerId, s.currentFrame, id, newAttrs)
-        scaleStartRef.current = { x: e.clientX, y: e.clientY }
-        scaleObjRef.current = { ...scaleObjRef.current, attrs: { ...attrs, ...newAttrs } }
+        // Don't commit — store as preview
+        setScalePreview({ id, type, attrs: { ...attrs, ...newAttrs } })
       }
     },
     [setPan],
@@ -239,9 +241,25 @@ function App() {
     }
     isDraggingRef.current = false
     dragObjRef.current = null
+
+    // Commit scale preview on mouseup
+    if (isScalingRef.current && scalePreview && scaleObjRef.current) {
+      const s = useStore.getState()
+      const { layerId } = scaleObjRef.current
+      // Merge only the changed attrs (preview has full attrs, diff against original)
+      const original = scaleObjRef.current.attrs
+      const changed: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(scalePreview.attrs)) {
+        if (v !== original[k]) changed[k] = v
+      }
+      if (Object.keys(changed).length > 0) {
+        s.updateObjectAttrs(layerId, s.currentFrame, scalePreview.id, changed)
+      }
+    }
     isScalingRef.current = false
     scaleObjRef.current = null
-  }, [])
+    setScalePreview(null)
+  }, [scalePreview])
 
   // Timeline scrubbing
   const scrubToX = useCallback(
@@ -402,9 +420,17 @@ function App() {
                     })}
                 </g>
 
+                {/* Scale preview ghost */}
+                {scalePreview && (
+                  <g opacity={0.4}>
+                    <SvgObject obj={scalePreview} />
+                  </g>
+                )}
+
                 {/* Bounding box for selected object */}
                 {selectedObjectId && (() => {
-                  const selObj = project.layers
+                  // During scaling, show bbox around preview; otherwise around actual object
+                  const selObj = scalePreview ?? project.layers
                     .filter((l) => l.visible)
                     .flatMap((l) => resolveFrame(l, currentFrame))
                     .find((o) => o.id === selectedObjectId)

@@ -63,8 +63,6 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
   path: [
     { key: 'translateX', label: 'Offset X', type: 'number' },
     { key: 'translateY', label: 'Offset Y', type: 'number' },
-    { key: 'scaleX', label: 'Scale X', type: 'number', step: 0.01 },
-    { key: 'scaleY', label: 'Scale Y', type: 'number', step: 0.01 },
     ROTATION_FIELD,
     ...ORIGIN_FIELDS,
     ...STYLE_FIELDS,

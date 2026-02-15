@@ -37,14 +37,13 @@ export function computeBBox(obj: FlickObject): BBox | null {
       const d = obj.attrs.d as string | undefined
       if (!d) return null
       const tx = a.translateX ?? 0, ty = a.translateY ?? 0
-      const sx = a.scaleX ?? 1, sy = a.scaleY ?? 1
       const intrinsic = pathIntrinsicBBox(d)
       if (!intrinsic) return null
       return {
-        x: intrinsic.x * sx + tx,
-        y: intrinsic.y * sy + ty,
-        width: intrinsic.width * sx,
-        height: intrinsic.height * sy,
+        x: intrinsic.x + tx,
+        y: intrinsic.y + ty,
+        width: intrinsic.width,
+        height: intrinsic.height,
       }
     }
 
