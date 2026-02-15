@@ -41,6 +41,54 @@ export function dragAttrs(
   }
 }
 
+// ── Rotation ──
+
+/**
+ * Compute new attrs after rotating an object to `newRotation` degrees,
+ * keeping `pivotWorld` fixed in world/canvas space.
+ *
+ * When the pivot is not the object's defined origin, position is adjusted
+ * so the pivot visually stays in place.
+ */
+export function computeRotationAttrs(
+  type: string,
+  attrs: Record<string, unknown>,
+  bbox: BBox,
+  pivotWorld: [number, number],
+  newRotation: number,
+): Record<string, unknown> {
+  const oldRotation = (attrs.rotation as number) ?? 0
+  const ox = (attrs.originX as number) ?? 0.5
+  const oy = (attrs.originY as number) ?? 0.5
+
+  // Object's rotation origin in pre-rotation (= world) space
+  const oX = bbox.x + bbox.width * ox
+  const oY = bbox.y + bbox.height * oy
+
+  // Pivot's world-space offset from origin
+  const pDx = pivotWorld[0] - oX
+  const pDy = pivotWorld[1] - oY
+
+  // Unrotate pivot to get its local-space offset from origin
+  const oldRad = (oldRotation * Math.PI) / 180
+  const cosOld = Math.cos(oldRad), sinOld = Math.sin(oldRad)
+  const pRelX = cosOld * pDx + sinOld * pDy
+  const pRelY = -sinOld * pDx + cosOld * pDy
+
+  // Re-rotate with new angle
+  const newRad = (newRotation * Math.PI) / 180
+  const cosNew = Math.cos(newRad), sinNew = Math.sin(newRad)
+  const newRotPx = cosNew * pRelX - sinNew * pRelY
+  const newRotPy = sinNew * pRelX + cosNew * pRelY
+
+  // Origin displacement = R(θ)*d - R(θ')*d
+  const posDx = pDx - newRotPx
+  const posDy = pDy - newRotPy
+
+  const posAttrs = dragAttrs(type, attrs, posDx, posDy)
+  return { ...posAttrs, rotation: newRotation }
+}
+
 // ── Scaling ──
 
 /**

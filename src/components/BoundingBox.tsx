@@ -5,15 +5,19 @@ export type HandleId =
   | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br'
   | 'edge-t' | 'edge-r' | 'edge-b' | 'edge-l'
 
+export type RotateCorner = 'tl' | 'tr' | 'bl' | 'br'
+
 interface BoundingBoxProps {
   obj: FlickObject
   zoom: number
   onHandleMouseDown?: (handle: HandleId, e: React.MouseEvent) => void
+  onRotateMouseDown?: (corner: RotateCorner, e: React.MouseEvent) => void
 }
 
 const HANDLE_SIZE = 8
+const ROTATE_ZONE = 20
 
-export function BoundingBox({ obj, zoom, onHandleMouseDown }: BoundingBoxProps) {
+export function BoundingBox({ obj, zoom, onHandleMouseDown, onRotateMouseDown }: BoundingBoxProps) {
   const bbox = computeBBox(obj)
   if (!bbox) return null
 
@@ -23,6 +27,7 @@ export function BoundingBox({ obj, zoom, onHandleMouseDown }: BoundingBoxProps) 
 
   // Inverse scale for handles so they stay constant screen size
   const s = HANDLE_SIZE / zoom
+  const rz = ROTATE_ZONE * 2 / zoom
   const strokeW = 1.5 / zoom
 
   // Corner midpoints for edge handles
@@ -65,6 +70,26 @@ export function BoundingBox({ obj, zoom, onHandleMouseDown }: BoundingBoxProps) 
         strokeWidth={strokeW}
         pointerEvents="none"
       />
+
+      {/* Rotation zones — larger invisible rects behind corner handles */}
+      {cornerHandles.map((h) => {
+        const corner = h.id.split('-')[1] as RotateCorner
+        return (
+          <rect
+            key={`rotate-${corner}`}
+            x={h.pos[0] - rz / 2}
+            y={h.pos[1] - rz / 2}
+            width={rz}
+            height={rz}
+            fill="transparent"
+            style={{ cursor: 'grab' }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              onRotateMouseDown?.(corner, e)
+            }}
+          />
+        )
+      })}
 
       {/* Handles */}
       {allHandles.map((h) => (

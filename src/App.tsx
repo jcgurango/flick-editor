@@ -3,9 +3,9 @@ import { useStore } from './store'
 import { getActiveKeyframe, getNextKeyframe } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
-import { dragAttrs, computeScale } from './lib/transform'
-import { computeBBox } from './lib/bbox'
-import type { HandleId } from './components/BoundingBox'
+import { dragAttrs, computeScale, computeRotationAttrs } from './lib/transform'
+import { computeBBox, absoluteOrigin, rotatedCorners } from './lib/bbox'
+import type { HandleId, RotateCorner } from './components/BoundingBox'
 import type { FlickObject } from './types/project'
 import { SvgObject } from './components/SvgObject'
 import { BoundingBox } from './components/BoundingBox'
@@ -126,6 +126,17 @@ function App() {
   const scaleHandleRef = useRef<HandleId>('corner-tl')
   const scaleObjRef = useRef<{ id: string; layerId: string; type: string; attrs: Record<string, unknown> } | null>(null)
 
+  // Rotation refs
+  const isRotatingRef = useRef(false)
+  const rotateRefAngleRef = useRef(0)  // reference angle in radians (adjusted on pivot change)
+  const rotatePivotRef = useRef<[number, number]>([0, 0])  // current rotation pivot
+  const rotateOrigRotRef = useRef(0)  // original rotation in degrees
+  const rotateLastShiftRef = useRef(false)
+  const rotateCornerRef = useRef<RotateCorner>('tl')
+  const rotateObjRef = useRef<{
+    id: string; layerId: string; type: string; attrs: Record<string, unknown>
+  } | null>(null)
+
   // Timeline scrub
   const isScrubbing = useRef(false)
   const scrubWrapperRef = useRef<HTMLDivElement>(null)
@@ -229,6 +240,64 @@ function App() {
         )
         // Don't commit — store as preview
         setScalePreview({ id, type, attrs: { ...attrs, ...newAttrs } })
+        return
+      }
+
+      if (isRotatingRef.current && rotateObjRef.current) {
+        const s = useStore.getState()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const canvasX = (e.clientX - rect.left - s.pan.x) / s.zoom
+        const canvasY = (e.clientY - rect.top - s.pan.y) / s.zoom
+
+        const { id, layerId, type, attrs } = rotateObjRef.current
+
+        // Live pivot switching when shift toggles
+        if (e.shiftKey !== rotateLastShiftRef.current) {
+          const [opx, opy] = rotatePivotRef.current
+          const oldAngle = Math.atan2(canvasY - opy, canvasX - opx)
+          const oldDelta = oldAngle - rotateRefAngleRef.current
+
+          const bbox = computeBBox({ id, type, attrs })
+          if (bbox) {
+            const rot = (attrs.rotation as number) ?? 0
+            const origin = absoluteOrigin({ id, type, attrs }, bbox)
+            const rCorners = rotatedCorners(bbox, rot, origin)
+            let newPivot: [number, number]
+            if (e.shiftKey) {
+              const opp: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
+              newPivot = rCorners[opp[rotateCornerRef.current]]
+            } else {
+              newPivot = [
+                (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
+                (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
+              ]
+            }
+            const newAngle = Math.atan2(canvasY - newPivot[1], canvasX - newPivot[0])
+            rotateRefAngleRef.current = newAngle - oldDelta
+            rotatePivotRef.current = newPivot
+          }
+          rotateLastShiftRef.current = e.shiftKey
+        }
+
+        const [px, py] = rotatePivotRef.current
+        const currentAngle = Math.atan2(canvasY - py, canvasX - px)
+        const rawDeltaDeg = ((currentAngle - rotateRefAngleRef.current) * 180) / Math.PI
+        let newRotation = rotateOrigRotRef.current + rawDeltaDeg
+
+        // Normalize to 0-360
+        newRotation = ((newRotation % 360) + 360) % 360
+
+        // Snap to 15 degree increments unless ctrl is held
+        if (!e.ctrlKey) {
+          newRotation = Math.round(newRotation / 15) * 15
+        }
+
+        const bbox = computeBBox({ id, type, attrs })
+        if (!bbox) return
+        const rotAttrs = computeRotationAttrs(
+          type, attrs, bbox, rotatePivotRef.current, newRotation,
+        )
+        s.updateObjectAttrs(layerId, s.currentFrame, id, rotAttrs)
       }
     },
     [setPan],
@@ -259,6 +328,8 @@ function App() {
     isScalingRef.current = false
     scaleObjRef.current = null
     setScalePreview(null)
+    isRotatingRef.current = false
+    rotateObjRef.current = null
   }, [scalePreview])
 
   // Timeline scrubbing
@@ -441,7 +512,6 @@ function App() {
                       zoom={zoom}
                       onHandleMouseDown={(handle, e) => {
                         e.stopPropagation()
-                        // Find the keyframe object for editing
                         const layer = project.layers.find((l) => l.id === activeLayerId)
                         const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
                         const kfObj = kf?.objects.find((o) => o.id === selectedObjectId)
@@ -450,6 +520,43 @@ function App() {
                         scaleStartRef.current = { x: e.clientX, y: e.clientY }
                         scaleHandleRef.current = handle
                         scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                      }}
+                      onRotateMouseDown={(corner: RotateCorner, e: React.MouseEvent) => {
+                        e.stopPropagation()
+                        const layer = project.layers.find((l) => l.id === activeLayerId)
+                        const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                        const kfObj = kf?.objects.find((o) => o.id === selectedObjectId)
+                        if (!layer || !kf || !kfObj) return
+
+                        const bbox = computeBBox(kfObj)
+                        if (!bbox) return
+                        const rot = (kfObj.attrs.rotation as number) ?? 0
+                        const origin = absoluteOrigin(kfObj, bbox)
+                        const rCorners = rotatedCorners(bbox, rot, origin)
+
+                        let pivot: [number, number]
+                        if (e.shiftKey) {
+                          const oppositeIdx: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
+                          pivot = rCorners[oppositeIdx[corner]]
+                        } else {
+                          pivot = [
+                            (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
+                            (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
+                          ]
+                        }
+
+                        const svgRect = canvasAreaRef.current!.getBoundingClientRect()
+                        const s = useStore.getState()
+                        const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
+                        const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+
+                        isRotatingRef.current = true
+                        rotateRefAngleRef.current = Math.atan2(startY - pivot[1], startX - pivot[0])
+                        rotatePivotRef.current = pivot
+                        rotateOrigRotRef.current = rot
+                        rotateLastShiftRef.current = e.shiftKey
+                        rotateCornerRef.current = corner
+                        rotateObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
                       }}
                     />
                   )
