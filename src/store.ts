@@ -129,6 +129,9 @@ function createDemoProject(): Project {
     },
   ]
   p.layers.push(layer2)
+  p.layers.push(createLayer('Layer'))
+  p.layers.push(createLayer('Layer'))
+  p.layers.push(createLayer('Layer'))
   p.layers.push(createLayer('Background'))
 
   return p

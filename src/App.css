@@ -157,8 +157,9 @@
   width: var(--timeline-layer-width);
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow-y: hidden;
   background: var(--bg-panel-alt);
+  border-top: 20px solid var(--timeline-header); /* match frame-numbers row height */
 }
 
 .timeline-layer {

@@ -91,6 +91,7 @@ function App() {
   // Timeline scrub
   const isScrubbing = useRef(false)
   const scrubWrapperRef = useRef<HTMLDivElement>(null)
+  const layersRef = useRef<HTMLDivElement>(null)
 
   // Measure container and compute initial zoom-to-fit
   useLayoutEffect(() => {
@@ -329,7 +330,7 @@ function App() {
 
         <div className="timeline-body">
           {/* Layers list */}
-          <div className="timeline-layers">
+          <div className="timeline-layers" ref={layersRef}>
             {project.layers.map((layer) => (
               <div
                 key={layer.id}
@@ -351,6 +352,11 @@ function App() {
             className="timeline-frames-wrapper"
             ref={scrubWrapperRef}
             onMouseDown={handleScrubDown}
+            onScroll={(e) => {
+              if (layersRef.current) {
+                layersRef.current.scrollTop = e.currentTarget.scrollTop
+              }
+            }}
           >
             {/* Playhead line */}
             <div
