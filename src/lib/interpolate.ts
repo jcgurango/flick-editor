@@ -1,5 +1,6 @@
 import type { TweenType, EaseDirection, FlickObject, Layer } from '../types/project'
 import { getActiveKeyframe, getNextKeyframe } from '../types/project'
+import { interpolatePath } from './path-morph'
 
 // ── Easing Functions ──
 // Each takes t in [0,1] and returns eased t
@@ -98,12 +99,21 @@ function lerpColor(a: string, b: string, t: number): string {
   return toHex(lerp(ar, br, t), lerp(ag, bg, t), lerp(ab, bb, t))
 }
 
+const PATH_RE = /^[Mm]\s*[-\d]/
+
+function isSvgPath(v: unknown): v is string {
+  return typeof v === 'string' && PATH_RE.test(v.trim())
+}
+
 function interpolateAttr(a: unknown, b: unknown, t: number): unknown {
   if (typeof a === 'number' && typeof b === 'number') {
     return lerp(a, b, t)
   }
   if (isHexColor(a) && isHexColor(b)) {
     return lerpColor(a, b, t)
+  }
+  if (isSvgPath(a) && isSvgPath(b)) {
+    return interpolatePath(a, b, t)
   }
   // Non-interpolatable: hold value from 'a'
   return a

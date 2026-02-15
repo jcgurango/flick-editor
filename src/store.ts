@@ -80,6 +80,38 @@ function createDemoProject(): Project {
     },
   ]
 
+  const splatLayer = createLayer('Splat')
+  const splatId = generateId()
+  const splat1 = 'M600,700 C620,660 670,650 700,670 C730,650 780,660 800,700 C820,740 810,790 780,810 C800,830 790,870 760,880 C740,900 700,910 680,890 C660,910 620,900 600,880 C580,860 570,830 590,810 C560,790 550,740 600,700 Z'
+  const splat2 = 'M580,680 C610,630 690,620 730,660 C770,630 820,670 810,720 C840,750 830,810 790,830 C810,860 780,900 740,900 C720,930 670,930 650,900 C620,920 580,890 580,860 C550,840 540,780 570,760 C540,730 550,690 580,680 Z'
+  splatLayer.keyframes = [
+    {
+      frame: 1,
+      tween: 'smooth',
+      easeDirection: 'in-out',
+      objects: [
+        {
+          id: splatId,
+          type: 'path',
+          attrs: { d: splat1, fill: '#e8443a', stroke: '#a02020', strokeWidth: 3 },
+        },
+      ],
+    },
+    {
+      frame: 15,
+      tween: 'discrete',
+      easeDirection: 'in-out',
+      objects: [
+        {
+          id: splatId,
+          type: 'path',
+          attrs: { d: splat2, fill: '#44cc88', stroke: '#228855', strokeWidth: 3 },
+        },
+      ],
+    },
+  ]
+  p.layers.push(splatLayer)
+
   const layer2 = createLayer('Layer 2')
   const circleId = generateId()
   layer2.keyframes = [
