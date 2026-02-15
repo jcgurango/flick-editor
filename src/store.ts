@@ -61,7 +61,7 @@ function createDemoProject(): Project {
         {
           id: rectId2,
           type: 'rect',
-          attrs: { x: 200, y: 400, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
+          attrs: { x: 200, y: 400, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4, rotation: 0 },
         },
       ],
     },
@@ -78,7 +78,7 @@ function createDemoProject(): Project {
         {
           id: rectId2,
           type: 'rect',
-          attrs: { x: 200, y: 500, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
+          attrs: { x: 200, y: 500, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4, rotation: 0 },
         },
       ],
     },
@@ -97,7 +97,7 @@ function createDemoProject(): Project {
         {
           id: splatId,
           type: 'path',
-          attrs: { d: s1.d, x: s1.x, y: s1.y, fill: '#e8443a', stroke: '#a02020', strokeWidth: 3 },
+          attrs: { d: s1.d, x: s1.x, y: s1.y, fill: '#e8443a', stroke: '#a02020', strokeWidth: 3, rotation: 0 },
         },
       ],
     },
@@ -109,7 +109,7 @@ function createDemoProject(): Project {
         {
           id: splatId,
           type: 'path',
-          attrs: { d: s2.d, x: s2.x, y: s2.y, fill: '#44cc88', stroke: '#228855', strokeWidth: 3 },
+          attrs: { d: s2.d, x: s2.x, y: s2.y, fill: '#44cc88', stroke: '#228855', strokeWidth: 3, rotation: 0 },
         },
       ],
     },
@@ -126,8 +126,8 @@ function createDemoProject(): Project {
       objects: [
         {
           id: circleId,
-          type: 'circle',
-          attrs: { cx: 1400, cy: 300, r: 80, fill: '#44cc88', stroke: '#228855', strokeWidth: 2 },
+          type: 'ellipse',
+          attrs: { cx: 1400, cy: 300, rx: 80, ry: 80, fill: '#44cc88', stroke: '#228855', strokeWidth: 2, rotation: 0 },
         },
       ],
     },
