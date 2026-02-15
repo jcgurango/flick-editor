@@ -41,6 +41,7 @@ interface EditorState {
 function createDemoProject(): Project {
   const p = createProject('My Animation')
   const rectId = generateId()
+  const rectId2 = generateId()
 
   p.layers[0].keyframes = [
     {
@@ -51,7 +52,12 @@ function createDemoProject(): Project {
         {
           id: rectId,
           type: 'rect',
-          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
+          attrs: { x: 200, y: 200, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 15, rx: 20 },
+        },
+        {
+          id: rectId2,
+          type: 'rect',
+          attrs: { x: 200, y: 400, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
         },
       ],
     },
@@ -64,6 +70,11 @@ function createDemoProject(): Project {
           id: rectId,
           type: 'rect',
           attrs: { x: 800, y: 400, width: 400, height: 250, fill: '#ff6a4a', stroke: '#cc3322', strokeWidth: 2, rx: 4 },
+        },
+        {
+          id: rectId2,
+          type: 'rect',
+          attrs: { x: 200, y: 500, width: 200, height: 150, fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rx: 4 },
         },
       ],
     },

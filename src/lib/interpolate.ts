@@ -9,7 +9,7 @@ type EaseFn = (t: number) => number
 const easingFunctions: Record<Exclude<TweenType, 'discrete'>, EaseFn> = {
   linear: (t) => t,
 
-  smooth: (t) => t * t * (3 - 2 * t), // smoothstep (Hermite)
+  smooth: (t) => t * t, // quadratic ease-in — wrappers produce proper ease-out/in-out
 
   cubic: (t) => t * t * t,
 
@@ -56,7 +56,7 @@ function applyEaseDirection(fn: EaseFn, direction: EaseDirection): EaseFn {
     case 'in-out':
       return (t) => {
         if (t < 0.5) return fn(t * 2) / 2
-        return 1 - fn((1 - t) * 2) / 2
+        return (2 - fn((1 - t) * 2)) / 2
       }
   }
 }
