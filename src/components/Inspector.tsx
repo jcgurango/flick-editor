@@ -60,7 +60,7 @@ function TweenSection({ layerId, kf }: { layerId: string; kf: { frame: number; t
 export function Inspector() {
   const project = useStore((s) => s.project)
   const selectedKeyframe = useStore((s) => s.selectedKeyframe)
-  const selectedObjectId = useStore((s) => s.selectedObjectId)
+  const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const activeLayerId = useStore((s) => s.activeLayerId)
   const currentFrame = useStore((s) => s.currentFrame)
   const updateObjectAttrs = useStore((s) => s.updateObjectAttrs)
@@ -68,11 +68,26 @@ export function Inspector() {
   // Find selected object on the active keyframe
   const activeLayer = project.layers.find((l) => l.id === activeLayerId)
   const activeKf = activeLayer?.keyframes.find((k) => k.frame === currentFrame)
-  const selectedObj = selectedObjectId && activeKf
-    ? activeKf.objects.find((o) => o.id === selectedObjectId)
+  const selectedObj = selectedObjectIds.length === 1 && activeKf
+    ? activeKf.objects.find((o) => o.id === selectedObjectIds[0])
     : null
 
-  // Mode 1: Object selected on a keyframe
+  // Mode 1a: Multiple objects selected
+  if (selectedObjectIds.length > 1 && activeLayer && activeKf) {
+    return (
+      <div className="inspector">
+        <div className="inspector-section">
+          <div className="inspector-section-title">Selection</div>
+          <div className="inspector-section-subtitle">
+            {selectedObjectIds.length} objects selected
+          </div>
+        </div>
+        <TweenSection layerId={activeLayer.id} kf={activeKf} />
+      </div>
+    )
+  }
+
+  // Mode 1b: Single object selected on a keyframe
   if (selectedObj && activeLayer && activeKf) {
     const fields = OBJECT_FIELDS[selectedObj.type] ?? []
     const typeName = TYPE_NAMES[selectedObj.type] ?? selectedObj.type

@@ -5,6 +5,7 @@ import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
 import { dragAttrs, computeScale, computeRotationAttrs } from './lib/transform'
 import { computeBBox, absoluteOrigin, rotatedCorners } from './lib/bbox'
+import type { BBox } from './lib/bbox'
 import type { HandleId, RotateCorner } from './components/BoundingBox'
 import type { FlickObject } from './types/project'
 import { SvgObject } from './components/SvgObject'
@@ -75,12 +76,15 @@ function App() {
   const togglePlayback = useStore((s) => s.togglePlayback)
   const activeTool = useStore((s) => s.activeTool)
   const setActiveTool = useStore((s) => s.setActiveTool)
-  const selectedObjectId = useStore((s) => s.selectedObjectId)
-  const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
+  const selectedObjectIds = useStore((s) => s.selectedObjectIds)
+  const setSelectedObjectIds = useStore((s) => s.setSelectedObjectIds)
+  const toggleSelectedObjectId = useStore((s) => s.toggleSelectedObjectId)
   // Scale preview: a ghost object shown during scaling (not yet committed)
   const [scalePreview, setScalePreview] = useState<FlickObject | null>(null)
   // Draw preview: shape being drawn with rect/ellipse tool
   const [drawPreview, setDrawPreview] = useState<FlickObject | null>(null)
+  // Box select marquee (canvas-space coordinates)
+  const [boxSelectRect, setBoxSelectRect] = useState<BBox | null>(null)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -96,18 +100,22 @@ function App() {
 
       // Arrow key nudge
       const s = useStore.getState()
-      if (s.selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      if (s.selectedObjectIds.length > 0 && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault()
         const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
         const dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
 
-        // Find the object's layer and keyframe
-        const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
-        const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
-        const obj = kf?.objects.find((o) => o.id === s.selectedObjectId)
-        if (layer && kf && obj) {
-          const newAttrs = dragAttrs(obj.type, obj.attrs, dx, dy)
-          s.updateObjectAttrs(layer.id, kf.frame, obj.id, newAttrs)
+        for (const objId of s.selectedObjectIds) {
+          // Find which layer contains this object on the current keyframe
+          for (const layer of s.project.layers) {
+            const kf = layer.keyframes.find((k) => k.frame === s.currentFrame)
+            const obj = kf?.objects.find((o) => o.id === objId)
+            if (kf && obj) {
+              const newAttrs = dragAttrs(obj.type, obj.attrs, dx, dy)
+              s.updateObjectAttrs(layer.id, kf.frame, obj.id, newAttrs)
+              break
+            }
+          }
         }
       }
     }
@@ -146,6 +154,10 @@ function App() {
   const isDrawingRef = useRef(false)
   const drawStartRef = useRef({ x: 0, y: 0 })
   const drawIdRef = useRef('')
+
+  // Box select refs
+  const isBoxSelectingRef = useRef(false)
+  const boxSelectStartRef = useRef({ x: 0, y: 0 })
 
   // Timeline scrub
   const isScrubbing = useRef(false)
@@ -211,6 +223,17 @@ function App() {
         isPanningRef.current = true
         panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
         canvasAreaRef.current!.style.cursor = 'grabbing'
+        return
+      }
+
+      if (s.activeTool === 'select' && !e.shiftKey) {
+        // Start box select on empty canvas
+        e.preventDefault()
+        const svgRect = e.currentTarget.getBoundingClientRect()
+        const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
+        const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+        isBoxSelectingRef.current = true
+        boxSelectStartRef.current = { x: startX, y: startY }
         return
       }
 
@@ -325,6 +348,21 @@ function App() {
         return
       }
 
+      if (isBoxSelectingRef.current) {
+        const s = useStore.getState()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const curX = (e.clientX - rect.left - s.pan.x) / s.zoom
+        const curY = (e.clientY - rect.top - s.pan.y) / s.zoom
+        const { x: sx, y: sy } = boxSelectStartRef.current
+        setBoxSelectRect({
+          x: Math.min(sx, curX),
+          y: Math.min(sy, curY),
+          width: Math.abs(curX - sx),
+          height: Math.abs(curY - sy),
+        })
+        return
+      }
+
       if (isDrawingRef.current) {
         const s = useStore.getState()
         const rect = e.currentTarget.getBoundingClientRect()
@@ -372,13 +410,61 @@ function App() {
     [setPan],
   )
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (isPanningRef.current) {
       isPanningRef.current = false
       canvasAreaRef.current!.style.cursor = ''
     }
     isDraggingRef.current = false
     dragObjRef.current = null
+
+    // Box select
+    if (isBoxSelectingRef.current) {
+      isBoxSelectingRef.current = false
+      if (boxSelectRect && (boxSelectRect.width > 2 || boxSelectRect.height > 2)) {
+        // Find all objects whose rotated AABB intersects the marquee
+        const s = useStore.getState()
+        const hits: string[] = []
+        for (const layer of s.project.layers) {
+          if (!layer.visible) continue
+          const objects = resolveFrame(layer, s.currentFrame)
+          for (const obj of objects) {
+            const bbox = computeBBox(obj)
+            if (!bbox) continue
+            const rot = (obj.attrs.rotation as number) ?? 0
+            const origin = absoluteOrigin(obj, bbox)
+            const corners = rotatedCorners(bbox, rot, origin)
+            // Compute AABB of rotated corners
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            for (const [cx, cy] of corners) {
+              if (cx < minX) minX = cx
+              if (cx > maxX) maxX = cx
+              if (cy < minY) minY = cy
+              if (cy > maxY) maxY = cy
+            }
+            // AABB intersection test
+            const r = boxSelectRect
+            if (minX <= r.x + r.width && maxX >= r.x && minY <= r.y + r.height && maxY >= r.y) {
+              hits.push(obj.id)
+            }
+          }
+        }
+        if (e.ctrlKey || e.metaKey) {
+          // Ctrl: add hits to existing selection
+          const merged = new Set([...s.selectedObjectIds, ...hits])
+          s.setSelectedObjectIds([...merged])
+        } else {
+          s.setSelectedObjectIds(hits)
+        }
+      } else {
+        // Tiny drag = click on empty canvas → deselect (unless ctrl held)
+        if (!(e.ctrlKey || e.metaKey)) {
+          const s = useStore.getState()
+          s.setSelectedObjectIds([])
+        }
+      }
+      setBoxSelectRect(null)
+    }
 
     // Commit scale preview on mouseup
     if (isScalingRef.current && scalePreview && scaleObjRef.current) {
@@ -412,13 +498,13 @@ function App() {
           : a.rx > 1 && a.ry > 1
         if (hasSize) {
           s.addObjectToKeyframe(layer.id, kf.frame, drawPreview)
-          s.setSelectedObjectId(drawPreview.id)
+          s.setSelectedObjectIds([drawPreview.id])
         }
       }
     }
     isDrawingRef.current = false
     setDrawPreview(null)
-  }, [scalePreview, drawPreview])
+  }, [scalePreview, drawPreview, boxSelectRect])
 
   // Timeline scrubbing
   const scrubToX = useCallback(
@@ -536,7 +622,7 @@ function App() {
                   height={project.height}
                   fill="#e8e8e8"
                   filter="url(#canvas-shadow)"
-                  onClick={() => { if (activeTool === 'select') setSelectedObjectId(null) }}
+                  pointerEvents="all"
                 />
 
                 <g clipPath="url(#canvas-clip)" pointerEvents={activeTool === 'select' ? undefined : 'none'}>
@@ -556,12 +642,17 @@ function App() {
                               onClick={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe) return
                                 e.stopPropagation()
-                                setSelectedObjectId(obj.id)
+                                if (e.ctrlKey || e.metaKey) {
+                                  toggleSelectedObjectId(obj.id)
+                                } else {
+                                  setSelectedObjectIds([obj.id])
+                                }
                                 setActiveLayerId(layer.id)
                                 setSelectedKeyframe(null)
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe || e.shiftKey) return
+                                if (e.ctrlKey || e.metaKey) return // ctrl-click handled in onClick
                                 // Find the keyframe object (not interpolated) for editing
                                 const kf = layer.keyframes.find((k) => k.frame === currentFrame)
                                 const kfObj = kf?.objects.find((o) => o.id === obj.id)
@@ -570,7 +661,10 @@ function App() {
                                 isDraggingRef.current = true
                                 dragStartRef.current = { x: e.clientX, y: e.clientY }
                                 dragObjRef.current = { id: obj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
-                                setSelectedObjectId(obj.id)
+                                const s = useStore.getState()
+                                if (!s.selectedObjectIds.includes(obj.id)) {
+                                  setSelectedObjectIds([obj.id])
+                                }
                                 setActiveLayerId(layer.id)
                                 setSelectedKeyframe(null)
                               } : undefined}
@@ -595,68 +689,90 @@ function App() {
                   </g>
                 )}
 
-                {/* Bounding box for selected object */}
-                {activeTool === 'select' && selectedObjectId && (() => {
-                  // During scaling, show bbox around preview; otherwise around actual object
-                  const selObj = scalePreview ?? project.layers
+                {/* Box select marquee */}
+                {boxSelectRect && (
+                  <rect
+                    x={boxSelectRect.x}
+                    y={boxSelectRect.y}
+                    width={boxSelectRect.width}
+                    height={boxSelectRect.height}
+                    fill="rgba(74, 122, 255, 0.1)"
+                    stroke="#4a7aff"
+                    strokeWidth={1 / zoom}
+                    strokeDasharray={`${4 / zoom} ${4 / zoom}`}
+                    pointerEvents="none"
+                  />
+                )}
+
+                {/* Bounding boxes for selected objects */}
+                {activeTool === 'select' && selectedObjectIds.length > 0 && (() => {
+                  const allObjects = project.layers
                     .filter((l) => l.visible)
                     .flatMap((l) => resolveFrame(l, currentFrame))
-                    .find((o) => o.id === selectedObjectId)
-                  if (!selObj) return null
-                  return (
-                    <BoundingBox
-                      obj={selObj}
-                      zoom={zoom}
-                      onHandleMouseDown={(handle, e) => {
-                        e.stopPropagation()
-                        const layer = project.layers.find((l) => l.id === activeLayerId)
-                        const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
-                        const kfObj = kf?.objects.find((o) => o.id === selectedObjectId)
-                        if (!layer || !kf || !kfObj) return
-                        isScalingRef.current = true
-                        scaleStartRef.current = { x: e.clientX, y: e.clientY }
-                        scaleHandleRef.current = handle
-                        scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
-                      }}
-                      onRotateMouseDown={(corner: RotateCorner, e: React.MouseEvent) => {
-                        e.stopPropagation()
-                        const layer = project.layers.find((l) => l.id === activeLayerId)
-                        const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
-                        const kfObj = kf?.objects.find((o) => o.id === selectedObjectId)
-                        if (!layer || !kf || !kfObj) return
+                  const singleSelected = selectedObjectIds.length === 1
 
-                        const bbox = computeBBox(kfObj)
-                        if (!bbox) return
-                        const rot = (kfObj.attrs.rotation as number) ?? 0
-                        const origin = absoluteOrigin(kfObj, bbox)
-                        const rCorners = rotatedCorners(bbox, rot, origin)
+                  return selectedObjectIds.map((selId) => {
+                    // During scaling, show bbox around preview for the scaled object
+                    const selObj = (scalePreview && scalePreview.id === selId)
+                      ? scalePreview
+                      : allObjects.find((o) => o.id === selId)
+                    if (!selObj) return null
+                    return (
+                      <BoundingBox
+                        key={selId}
+                        obj={selObj}
+                        zoom={zoom}
+                        onHandleMouseDown={singleSelected ? (handle, e) => {
+                          e.stopPropagation()
+                          const layer = project.layers.find((l) => l.id === activeLayerId)
+                          const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                          const kfObj = kf?.objects.find((o) => o.id === selId)
+                          if (!layer || !kf || !kfObj) return
+                          isScalingRef.current = true
+                          scaleStartRef.current = { x: e.clientX, y: e.clientY }
+                          scaleHandleRef.current = handle
+                          scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                        } : undefined}
+                        onRotateMouseDown={singleSelected ? (corner: RotateCorner, e: React.MouseEvent) => {
+                          e.stopPropagation()
+                          const layer = project.layers.find((l) => l.id === activeLayerId)
+                          const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                          const kfObj = kf?.objects.find((o) => o.id === selId)
+                          if (!layer || !kf || !kfObj) return
 
-                        let pivot: [number, number]
-                        if (e.shiftKey) {
-                          const oppositeIdx: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
-                          pivot = rCorners[oppositeIdx[corner]]
-                        } else {
-                          pivot = [
-                            (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
-                            (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
-                          ]
-                        }
+                          const bbox = computeBBox(kfObj)
+                          if (!bbox) return
+                          const rot = (kfObj.attrs.rotation as number) ?? 0
+                          const origin = absoluteOrigin(kfObj, bbox)
+                          const rCorners = rotatedCorners(bbox, rot, origin)
 
-                        const svgRect = canvasAreaRef.current!.getBoundingClientRect()
-                        const s = useStore.getState()
-                        const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
-                        const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+                          let pivot: [number, number]
+                          if (e.shiftKey) {
+                            const oppositeIdx: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
+                            pivot = rCorners[oppositeIdx[corner]]
+                          } else {
+                            pivot = [
+                              (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
+                              (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
+                            ]
+                          }
 
-                        isRotatingRef.current = true
-                        rotateRefAngleRef.current = Math.atan2(startY - pivot[1], startX - pivot[0])
-                        rotatePivotRef.current = pivot
-                        rotateOrigRotRef.current = rot
-                        rotateLastShiftRef.current = e.shiftKey
-                        rotateCornerRef.current = corner
-                        rotateObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
-                      }}
-                    />
-                  )
+                          const svgRect = canvasAreaRef.current!.getBoundingClientRect()
+                          const s = useStore.getState()
+                          const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
+                          const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+
+                          isRotatingRef.current = true
+                          rotateRefAngleRef.current = Math.atan2(startY - pivot[1], startX - pivot[0])
+                          rotatePivotRef.current = pivot
+                          rotateOrigRotRef.current = rot
+                          rotateLastShiftRef.current = e.shiftKey
+                          rotateCornerRef.current = corner
+                          rotateObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                        } : undefined}
+                      />
+                    )
+                  })
                 })()}
               </g>
             </svg>

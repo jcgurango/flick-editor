@@ -29,8 +29,9 @@ interface EditorState {
   setActiveLayerId: (id: string) => void
   selectedKeyframe: SelectedKeyframe | null
   setSelectedKeyframe: (kf: SelectedKeyframe | null) => void
-  selectedObjectId: string | null
-  setSelectedObjectId: (id: string | null) => void
+  selectedObjectIds: string[]
+  setSelectedObjectIds: (ids: string[]) => void
+  toggleSelectedObjectId: (id: string) => void
 
   // Viewport
   zoom: number
@@ -196,8 +197,14 @@ export const useStore = create<EditorState>((set) => ({
   setActiveLayerId: (activeLayerId) => set({ activeLayerId }),
   selectedKeyframe: null,
   setSelectedKeyframe: (selectedKeyframe) => set({ selectedKeyframe }),
-  selectedObjectId: null,
-  setSelectedObjectId: (selectedObjectId) => set({ selectedObjectId }),
+  selectedObjectIds: [],
+  setSelectedObjectIds: (selectedObjectIds) => set({ selectedObjectIds }),
+  toggleSelectedObjectId: (id) =>
+    set((state) => ({
+      selectedObjectIds: state.selectedObjectIds.includes(id)
+        ? state.selectedObjectIds.filter((oid) => oid !== id)
+        : [...state.selectedObjectIds, id],
+    })),
 
   zoom: 1,
   setZoom: (zoom) => set({ zoom }),
