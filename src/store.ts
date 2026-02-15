@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
-import type { Project, TweenType, EaseDirection } from './types/project'
+import type { Project, TweenType, EaseDirection, FlickObject } from './types/project'
 import { recenterPath } from './lib/transform'
 
 export interface SelectedKeyframe {
@@ -19,6 +19,10 @@ interface EditorState {
   isPlaying: boolean
   togglePlayback: () => void
   _playRafId: number | null
+
+  // Tools
+  activeTool: string
+  setActiveTool: (tool: string) => void
 
   // Selection
   activeLayerId: string
@@ -40,6 +44,7 @@ interface EditorState {
   setKeyframeTween: (layerId: string, frame: number, tween: TweenType) => void
   setKeyframeEaseDirection: (layerId: string, frame: number, easeDirection: EaseDirection) => void
   updateObjectAttrs: (layerId: string, frame: number, objectId: string, attrs: Record<string, unknown>) => void
+  addObjectToKeyframe: (layerId: string, frame: number, object: FlickObject) => void
 }
 
 function createDemoProject(): Project {
@@ -184,6 +189,9 @@ export const useStore = create<EditorState>((set) => ({
     }
   },
 
+  activeTool: 'select',
+  setActiveTool: (activeTool) => set({ activeTool }),
+
   activeLayerId: initialProject.layers[0].id,
   setActiveLayerId: (activeLayerId) => set({ activeLayerId }),
   selectedKeyframe: null,
@@ -252,6 +260,25 @@ export const useStore = create<EditorState>((set) => ({
                             : { ...obj, attrs: { ...obj.attrs, ...attrs } },
                         ),
                       },
+                ),
+              },
+        ),
+      },
+    })),
+
+  addObjectToKeyframe: (layerId, frame, object) =>
+    set((state) => ({
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId
+            ? layer
+            : {
+                ...layer,
+                keyframes: layer.keyframes.map((kf) =>
+                  kf.frame !== frame
+                    ? kf
+                    : { ...kf, objects: [...kf.objects, object] },
                 ),
               },
         ),

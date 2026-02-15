@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
 import { useStore } from './store'
-import { getActiveKeyframe, getNextKeyframe } from './types/project'
+import { getActiveKeyframe, getNextKeyframe, generateId } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
 import { dragAttrs, computeScale, computeRotationAttrs } from './lib/transform'
@@ -73,10 +73,14 @@ function App() {
   const setContainerSize = useStore((s) => s.setContainerSize)
   const isPlaying = useStore((s) => s.isPlaying)
   const togglePlayback = useStore((s) => s.togglePlayback)
+  const activeTool = useStore((s) => s.activeTool)
+  const setActiveTool = useStore((s) => s.setActiveTool)
   const selectedObjectId = useStore((s) => s.selectedObjectId)
   const setSelectedObjectId = useStore((s) => s.setSelectedObjectId)
   // Scale preview: a ghost object shown during scaling (not yet committed)
   const [scalePreview, setScalePreview] = useState<FlickObject | null>(null)
+  // Draw preview: shape being drawn with rect/ellipse tool
+  const [drawPreview, setDrawPreview] = useState<FlickObject | null>(null)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -138,6 +142,11 @@ function App() {
     id: string; layerId: string; type: string; attrs: Record<string, unknown>
   } | null>(null)
 
+  // Drawing refs
+  const isDrawingRef = useRef(false)
+  const drawStartRef = useRef({ x: 0, y: 0 })
+  const drawIdRef = useRef('')
+
   // Timeline scrub
   const isScrubbing = useRef(false)
   const scrubWrapperRef = useRef<HTMLDivElement>(null)
@@ -192,14 +201,28 @@ function App() {
     [zoom, pan, setZoom, setPan],
   )
 
-  // Shift+Drag pan
+  // SVG mousedown: pan (select + shift) or start drawing (rect/ellipse tool)
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
-      if (!e.shiftKey) return
-      e.preventDefault()
-      isPanningRef.current = true
-      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
-      canvasAreaRef.current!.style.cursor = 'grabbing'
+      const s = useStore.getState()
+
+      if (s.activeTool === 'select' && e.shiftKey) {
+        e.preventDefault()
+        isPanningRef.current = true
+        panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
+        canvasAreaRef.current!.style.cursor = 'grabbing'
+        return
+      }
+
+      if (s.activeTool === 'rect' || s.activeTool === 'ellipse') {
+        e.preventDefault()
+        const svgRect = e.currentTarget.getBoundingClientRect()
+        const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
+        const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+        isDrawingRef.current = true
+        drawStartRef.current = { x: startX, y: startY }
+        drawIdRef.current = generateId()
+      }
     },
     [pan],
   )
@@ -299,6 +322,51 @@ function App() {
           type, attrs, bbox, rotatePivotRef.current, newRotation,
         )
         s.updateObjectAttrs(layerId, s.currentFrame, id, rotAttrs)
+        return
+      }
+
+      if (isDrawingRef.current) {
+        const s = useStore.getState()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const curX = (e.clientX - rect.left - s.pan.x) / s.zoom
+        const curY = (e.clientY - rect.top - s.pan.y) / s.zoom
+        const { x: sx, y: sy } = drawStartRef.current
+        let w = curX - sx
+        let h = curY - sy
+
+        // Shift: constrain to square/circle
+        if (e.shiftKey) {
+          const size = Math.max(Math.abs(w), Math.abs(h))
+          w = (w >= 0 ? 1 : -1) * size
+          h = (h >= 0 ? 1 : -1) * size
+        }
+
+        const id = drawIdRef.current
+        if (s.activeTool === 'rect') {
+          setDrawPreview({
+            id,
+            type: 'rect',
+            attrs: {
+              x: w >= 0 ? sx : sx + w,
+              y: h >= 0 ? sy : sy + h,
+              width: Math.abs(w),
+              height: Math.abs(h),
+              fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rotation: 0,
+            },
+          })
+        } else if (s.activeTool === 'ellipse') {
+          setDrawPreview({
+            id,
+            type: 'ellipse',
+            attrs: {
+              cx: sx + w / 2,
+              cy: sy + h / 2,
+              rx: Math.abs(w) / 2,
+              ry: Math.abs(h) / 2,
+              fill: '#4a7aff', stroke: '#2255cc', strokeWidth: 2, rotation: 0,
+            },
+          })
+        }
       }
     },
     [setPan],
@@ -331,7 +399,26 @@ function App() {
     setScalePreview(null)
     isRotatingRef.current = false
     rotateObjRef.current = null
-  }, [scalePreview])
+
+    // Commit drawn shape
+    if (isDrawingRef.current && drawPreview) {
+      const s = useStore.getState()
+      const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+      const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
+      if (layer && kf) {
+        const a = drawPreview.attrs as Record<string, number>
+        const hasSize = drawPreview.type === 'rect'
+          ? a.width > 1 && a.height > 1
+          : a.rx > 1 && a.ry > 1
+        if (hasSize) {
+          s.addObjectToKeyframe(layer.id, kf.frame, drawPreview)
+          s.setSelectedObjectId(drawPreview.id)
+        }
+      }
+    }
+    isDrawingRef.current = false
+    setDrawPreview(null)
+  }, [scalePreview, drawPreview])
 
   // Timeline scrubbing
   const scrubToX = useCallback(
@@ -408,8 +495,9 @@ function App() {
             ) : (
               <button
                 key={tool.id}
-                className={`tool-btn${tool.id === 'select' ? ' active' : ''}`}
+                className={`tool-btn${tool.id === activeTool ? ' active' : ''}`}
                 title={tool.label}
+                onClick={() => setActiveTool(tool.id)}
               >
                 {tool.icon}
               </button>
@@ -424,6 +512,7 @@ function App() {
               width={containerSize.width}
               height={containerSize.height}
               className="canvas-svg"
+              style={activeTool !== 'select' ? { cursor: 'crosshair' } : undefined}
               onWheel={handleWheel}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
@@ -447,10 +536,10 @@ function App() {
                   height={project.height}
                   fill="#e8e8e8"
                   filter="url(#canvas-shadow)"
-                  onClick={() => setSelectedObjectId(null)}
+                  onClick={() => { if (activeTool === 'select') setSelectedObjectId(null) }}
                 />
 
-                <g clipPath="url(#canvas-clip)">
+                <g clipPath="url(#canvas-clip)" pointerEvents={activeTool === 'select' ? undefined : 'none'}>
                   {project.layers
                     .filter((l) => l.visible)
                     .slice()
@@ -464,14 +553,14 @@ function App() {
                             <SvgObject
                               key={obj.id}
                               obj={obj}
-                              onClick={(e) => {
+                              onClick={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe) return
                                 e.stopPropagation()
                                 setSelectedObjectId(obj.id)
                                 setActiveLayerId(layer.id)
                                 setSelectedKeyframe(null)
-                              }}
-                              onMouseDown={(e) => {
+                              } : undefined}
+                              onMouseDown={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe || e.shiftKey) return
                                 // Find the keyframe object (not interpolated) for editing
                                 const kf = layer.keyframes.find((k) => k.frame === currentFrame)
@@ -484,7 +573,7 @@ function App() {
                                 setSelectedObjectId(obj.id)
                                 setActiveLayerId(layer.id)
                                 setSelectedKeyframe(null)
-                              }}
+                              } : undefined}
                             />
                           ))}
                         </g>
@@ -499,8 +588,15 @@ function App() {
                   </g>
                 )}
 
+                {/* Draw preview ghost */}
+                {drawPreview && (
+                  <g opacity={0.6}>
+                    <SvgObject obj={drawPreview} />
+                  </g>
+                )}
+
                 {/* Bounding box for selected object */}
-                {selectedObjectId && (() => {
+                {activeTool === 'select' && selectedObjectId && (() => {
                   // During scaling, show bbox around preview; otherwise around actual object
                   const selObj = scalePreview ?? project.layers
                     .filter((l) => l.visible)
