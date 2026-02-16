@@ -290,6 +290,40 @@ function App() {
         return
       }
 
+      // Select All
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault()
+        const s = useStore.getState()
+        if (s.editContext.length > 0) {
+          // In edit context: select all children of the current group
+          const ctx = s.editContext
+          const rootLayer = s.project.layers.find((l) => l.id === ctx[0].layerId)
+          if (rootLayer) {
+            const kf = rootLayer.keyframes.find((k) => k.frame === s.currentFrame)
+            if (kf) {
+              let objs: FlickObject[] = kf.objects
+              for (const entry of ctx) {
+                const grp = objs.find((o) => o.id === entry.objectId)
+                if (grp?.type === 'group') objs = (grp.attrs.children as FlickObject[]) ?? []
+                else break
+              }
+              s.setSelectedObjectIds(objs.map((o) => o.id))
+            }
+          }
+        } else {
+          // Select all objects on current frame across visible unlocked layers (keyframes only)
+          const ids: string[] = []
+          for (const layer of s.project.layers) {
+            if (!layer.visible || layer.locked) continue
+            const kf = layer.keyframes.find((k) => k.frame === s.currentFrame)
+            if (kf) for (const obj of kf.objects) ids.push(obj.id)
+          }
+          s.setSelectedObjectIds(ids)
+        }
+        s.setInspectorFocus('canvas')
+        return
+      }
+
       // Group / Ungroup
       if ((e.ctrlKey || e.metaKey) && e.key === 'g' && !e.shiftKey) {
         e.preventDefault()

@@ -187,6 +187,15 @@ export function MenuBar() {
           action: deleteCtx.action,
           disabled: deleteCtx.disabled,
         },
+        { separator: true, label: '' },
+        {
+          label: 'Select All',
+          shortcut: 'Ctrl+A',
+          action: () => {
+            // Dispatch the keyboard shortcut so the handler in App.tsx runs
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }))
+          },
+        },
       ],
     },
     {
