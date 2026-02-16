@@ -17,9 +17,10 @@ type DragState =
 export function Hierarchy() {
   const project = useStore((s) => s.project)
   const currentFrame = useStore((s) => s.currentFrame)
-  const activeLayerId = useStore((s) => s.activeLayerId)
+  const selectedLayerIds = useStore((s) => s.selectedLayerIds)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const setActiveLayerId = useStore((s) => s.setActiveLayerId)
+  const setSelectedLayerIds = useStore((s) => s.setSelectedLayerIds)
   const setSelectedObjectIds = useStore((s) => s.setSelectedObjectIds)
   const setInspectorFocus = useStore((s) => s.setInspectorFocus)
   const reorderObject = useStore((s) => s.reorderObject)
@@ -73,7 +74,7 @@ export function Hierarchy() {
       {project.layers.map((layer, layerIdx) => {
         const activeKf = getActiveKeyframe(layer, currentFrame)
         const objects = activeKf?.objects ?? []
-        const isActive = layer.id === activeLayerId
+        const isActive = selectedLayerIds.includes(layer.id)
         const isLayerDragging = dragState?.kind === 'layer' && dragState.layerId === layer.id
         const showLayerDropBefore = dragState?.kind === 'layer' && layerDropIndex === layerIdx
 
@@ -88,7 +89,21 @@ export function Hierarchy() {
                   isLayerDragging && 'dragging',
                 ].filter(Boolean).join(' ')}
                 draggable
-                onClick={() => setActiveLayerId(layer.id)}
+                onClick={(e) => {
+                  if (e.shiftKey) {
+                    const s = useStore.getState()
+                    const activeIdx = project.layers.findIndex((l) => l.id === s.activeLayerId)
+                    const minIdx = Math.min(activeIdx, layerIdx)
+                    const maxIdx = Math.max(activeIdx, layerIdx)
+                    setSelectedLayerIds(project.layers.slice(minIdx, maxIdx + 1).map((l) => l.id))
+                  } else if (e.ctrlKey || e.metaKey) {
+                    useStore.getState().toggleSelectedLayerId(layer.id)
+                  } else {
+                    setSelectedLayerIds([layer.id])
+                  }
+                  setActiveLayerId(layer.id)
+                  setInspectorFocus('layer')
+                }}
                 onDragStart={(e) => handleLayerDragStart(layer.id, e)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => {

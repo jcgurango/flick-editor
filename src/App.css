@@ -146,25 +146,25 @@
 
 .timeline-body {
   flex: 1;
-  display: flex;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  position: relative;
+  user-select: none;
+  cursor: pointer;
 }
 
-/* Layers panel (left, fixed) */
-.timeline-layers {
-  width: var(--timeline-layer-width);
-  flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  background: var(--bg-panel-alt);
-  scrollbar-width: none;
-}
-.timeline-layers::-webkit-scrollbar {
-  display: none;
+/* Header row: sticky at top */
+.timeline-header-row {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 
+/* Corner cell: sticky top+left */
 .timeline-layers-header {
+  width: var(--timeline-layer-width);
+  min-width: var(--timeline-layer-width);
   height: 20px;
   display: flex;
   align-items: center;
@@ -172,10 +172,17 @@
   padding: 0 10px;
   background: var(--timeline-header);
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   font-size: 10px;
   position: sticky;
-  top: 0;
-  z-index: 2;
+  left: 0;
+  z-index: 4;
+}
+
+/* Layer row: combines layer label + frame cells */
+.timeline-row {
+  display: flex;
+  position: relative;
 }
 
 .timeline-layers-title {
@@ -194,22 +201,29 @@
 }
 
 .timeline-layer {
+  width: var(--timeline-layer-width);
+  min-width: var(--timeline-layer-width);
   height: 28px;
   display: flex;
   align-items: center;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   cursor: pointer;
   gap: 6px;
   font-size: 11px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-panel-alt);
 }
 
 .timeline-layer:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover) !important;
 }
 
 .timeline-layer.active {
-  background: var(--bg-active);
+  background: var(--bg-active) !important;
 }
 
 .timeline-layer.dragging {
@@ -253,23 +267,10 @@
   color: var(--text-primary);
 }
 
-/* Frames grid (right, scrollable) */
-.timeline-frames-wrapper {
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: auto;
-  position: relative;
-  user-select: none;
-  cursor: pointer;
-}
-
 .timeline-frame-numbers {
   height: 20px;
   display: flex;
-  position: sticky;
-  top: 0;
   background: var(--timeline-header);
-  z-index: 1;
   border-bottom: 1px solid var(--border);
 }
 
@@ -285,11 +286,6 @@
 
 .timeline-frame-number.fifth {
   color: var(--text-secondary);
-}
-
-.timeline-frames-rows {
-  display: flex;
-  flex-direction: column;
 }
 
 .timeline-frame-row {

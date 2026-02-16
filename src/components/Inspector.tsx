@@ -136,6 +136,16 @@ export function Inspector() {
     }
   }
 
+  // Layer focus: show layer properties
+  if (inspectorFocus === 'layer' && activeLayer) {
+    return (
+      <div className="inspector">
+        <SceneSection />
+        <LayerSection layer={activeLayer} />
+      </div>
+    )
+  }
+
   // Timeline focus: show keyframe/frame info
   if (inspectorFocus === 'timeline' && frameSelection) {
     if (selectedKfData) {

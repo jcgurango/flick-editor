@@ -63,6 +63,8 @@ function App() {
   const setCurrentFrame = useStore((s) => s.setCurrentFrame)
   const activeLayerId = useStore((s) => s.activeLayerId)
   const setActiveLayerId = useStore((s) => s.setActiveLayerId)
+  const selectedLayerIds = useStore((s) => s.selectedLayerIds)
+  const setSelectedLayerIds = useStore((s) => s.setSelectedLayerIds)
   const frameSelection = useStore((s) => s.frameSelection)
   const setFrameSelection = useStore((s) => s.setFrameSelection)
   const zoom = useStore((s) => s.zoom)
@@ -163,7 +165,9 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         e.preventDefault()
         const s = useStore.getState()
-        if (s.frameSelection) {
+        if (s.inspectorFocus === 'layer' && s.selectedLayerIds.length > 0) {
+          s.copyLayers()
+        } else if (s.frameSelection) {
           s.copyFrames()
         } else if (s.selectedObjectIds.length > 0) {
           s.copySelectedObjects()
@@ -173,7 +177,9 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         e.preventDefault()
         const s = useStore.getState()
-        if (s.clipboard.type === 'frames') {
+        if (s.clipboard.type === 'layers') {
+          s.pasteLayers()
+        } else if (s.clipboard.type === 'frames') {
           s.pasteFrames()
         } else {
           s.pasteObjects()
@@ -205,11 +211,11 @@ function App() {
         if (s.inspectorFocus === 'canvas' && s.selectedObjectIds.length > 0) {
           s.deleteSelectedObjects()
         } else if (s.inspectorFocus === 'timeline' && s.frameSelection) {
-          // Works for both single and multi-frame selections
           s.deleteFrameSelection()
+        } else if (s.inspectorFocus === 'layer' && s.selectedLayerIds.length > 0) {
+          s.deleteSelectedLayers()
         } else {
-          // Default: delete active layer
-          s.deleteLayer(s.activeLayerId)
+          s.deleteSelectedLayers()
         }
         return
       }
@@ -278,7 +284,6 @@ function App() {
 
   // Timeline
   const scrubWrapperRef = useRef<HTMLDivElement>(null)
-  const layersRef = useRef<HTMLDivElement>(null)
 
   // Measure container and compute initial zoom-to-fit
   useLayoutEffect(() => {
@@ -663,28 +668,29 @@ function App() {
   frameSelectEndRef.current = frameSelectEnd
   const frameSelectShiftRef = useRef(false)
 
-  /** Compute frame number from mouse X on the frames wrapper. */
+  /** Compute frame number from mouse X on the unified timeline body (accounting for sticky layer column). */
   const frameFromX = useCallback(
     (ev: MouseEvent | React.MouseEvent) => {
       const wrapper = scrubWrapperRef.current
       if (!wrapper) return null
       const rect = wrapper.getBoundingClientRect()
-      const x = ev.clientX - rect.left + wrapper.scrollLeft
+      const x = ev.clientX - rect.left + wrapper.scrollLeft - 160 // layer column width
+      if (x < 0) return null // clicked on layer column
       return Math.max(1, Math.min(project.totalFrames, Math.floor(x / 16) + 1))
     },
     [project.totalFrames],
   )
 
-  /** Compute cell { layerIdx, frame } from mouse event. Returns null if on frame numbers row. */
+  /** Compute cell { layerIdx, frame } from mouse event. Returns null if on frame numbers row or layer column. */
   const cellFromEvent = useCallback(
     (ev: MouseEvent | React.MouseEvent) => {
       const wrapper = scrubWrapperRef.current
       if (!wrapper) return null
       const rect = wrapper.getBoundingClientRect()
-      const y = ev.clientY - rect.top + wrapper.scrollTop - 20
-      if (y < 0) return null
+      const y = ev.clientY - rect.top + wrapper.scrollTop - 20 // header row height
+      if (y < 0) return null // frame numbers header
       const frame = frameFromX(ev)
-      if (!frame) return null
+      if (!frame) return null // layer column
       const layerIdx = Math.max(0, Math.min(project.layers.length - 1, Math.floor(y / 28)))
       return { layerIdx, frame }
     },
@@ -697,9 +703,10 @@ function App() {
       const cell = cellFromEvent(e)
 
       if (!cell) {
-        // Clicked on frame numbers row — scrub playhead
+        // Either frame numbers row or layer column
         const frame = frameFromX(e)
-        if (!frame) return
+        if (!frame) return // Layer column — let layer click/drag handlers handle it
+        // Frame numbers row — scrub playhead
         setCurrentFrame(frame)
         const onMove = (ev: MouseEvent) => {
           const f = frameFromX(ev)
@@ -1025,22 +1032,22 @@ function App() {
       {/* Timeline */}
       <div className="timeline" style={{ height: timelineHeight }}>
         <div className="timeline-toolbar">
-          <button className="timeline-btn" title="Add Layer">+</button>
-          <button className="timeline-btn" title="Delete Layer">−</button>
+          <button className="timeline-btn" title="Add Layer" onClick={() => useStore.getState().addLayer()}>+</button>
+          <button className="timeline-btn" title="Delete Layer" onClick={() => useStore.getState().deleteSelectedLayers()}>−</button>
           <div style={{ flex: 1 }} />
-          <button className="timeline-btn" title="Previous Frame">⏮</button>
+          <button className="timeline-btn" title="Previous Frame" onClick={() => setCurrentFrame(Math.max(1, currentFrame - 1))}>⏮</button>
           <button className="timeline-btn" title={isPlaying ? 'Pause' : 'Play'} onClick={togglePlayback}>
             {isPlaying ? '⏸' : '▶'}
           </button>
-          <button className="timeline-btn" title="Next Frame">⏭</button>
+          <button className="timeline-btn" title="Next Frame" onClick={() => setCurrentFrame(Math.min(project.totalFrames, currentFrame + 1))}>⏭</button>
           <div style={{ flex: 1 }} />
           <span className="timeline-frame-display">Frame {currentFrame}</span>
-          <button className="timeline-btn" title="Add Keyframe">◆</button>
+          <button className="timeline-btn" title="Add Keyframe" onClick={() => useStore.getState().insertKeyframe(activeLayerId, currentFrame)}>◆</button>
         </div>
 
-        <div className="timeline-body">
-          {/* Layers list */}
-          <div className="timeline-layers" ref={layersRef}>
+        <div className="timeline-body" ref={scrubWrapperRef} onMouseDown={handleTimelineMouseDown}>
+          {/* Header row */}
+          <div className="timeline-header-row">
             <div className="timeline-layers-header">
               <span className="timeline-layers-title">Layers</span>
               <div className="timeline-layer-actions">
@@ -1058,81 +1065,6 @@ function App() {
                 </button>
               </div>
             </div>
-            {project.layers.map((layer, layerIdx) => (
-              <div key={layer.id}>
-                {timelineLayerDrag && timelineLayerDropIdx === layerIdx && (
-                  <div className="timeline-layer-drop-indicator" />
-                )}
-                <div
-                  className={[
-                    'timeline-layer',
-                    layer.id === activeLayerId && 'active',
-                    timelineLayerDrag === layer.id && 'dragging',
-                  ].filter(Boolean).join(' ')}
-                  draggable
-                  onClick={() => setActiveLayerId(layer.id)}
-                  onDragStart={(e) => {
-                    setTimelineLayerDrag(layer.id)
-                    e.dataTransfer.effectAllowed = 'move'
-                    e.dataTransfer.setData('text/plain', layer.id)
-                  }}
-                  onDragEnd={() => { setTimelineLayerDrag(null); setTimelineLayerDropIdx(null) }}
-                  onDragOver={(e) => {
-                    e.preventDefault()
-                    e.dataTransfer.dropEffect = 'move'
-                    if (timelineLayerDrag) {
-                      const rect = e.currentTarget.getBoundingClientRect()
-                      const midY = rect.top + rect.height / 2
-                      setTimelineLayerDropIdx(e.clientY < midY ? layerIdx : layerIdx + 1)
-                    }
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    if (!timelineLayerDrag) return
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    const midY = rect.top + rect.height / 2
-                    const idx = e.clientY < midY ? layerIdx : layerIdx + 1
-                    reorderLayer(timelineLayerDrag, idx)
-                    setTimelineLayerDrag(null)
-                    setTimelineLayerDropIdx(null)
-                  }}
-                >
-                  <span className="timeline-layer-icon">■</span>
-                  <span className="timeline-layer-name">{layer.name}</span>
-                  <div className="timeline-layer-actions">
-                    <button
-                      title="Toggle visibility"
-                      style={{ opacity: layer.visible ? 1 : 0.3 }}
-                      onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id) }}
-                    >
-                      👁
-                    </button>
-                    <button
-                      title="Toggle lock"
-                      onClick={(e) => { e.stopPropagation(); toggleLayerLocked(layer.id) }}
-                    >
-                      {layer.locked ? '🔒' : '🔓'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {timelineLayerDrag && timelineLayerDropIdx === project.layers.length && (
-              <div className="timeline-layer-drop-indicator" />
-            )}
-          </div>
-
-          {/* Frames grid */}
-          <div
-            className="timeline-frames-wrapper"
-            ref={scrubWrapperRef}
-            onMouseDown={handleTimelineMouseDown}
-            onScroll={(e) => {
-              if (layersRef.current) {
-                layersRef.current.scrollTop = e.currentTarget.scrollTop
-              }
-            }}
-          >
             <div className="timeline-frame-numbers">
               {Array.from({ length: project.totalFrames }, (_, i) => (
                 <div
@@ -1143,46 +1075,131 @@ function App() {
                 </div>
               ))}
             </div>
-            <div className="timeline-frames-rows">
-              {project.layers.map((layer, layerIdx) => (
-                <div key={layer.id} className="timeline-frame-row">
-                  {Array.from({ length: project.totalFrames }, (_, i) => {
-                    const frameNum = i + 1
-                    const frameType = getFrameType(layer, frameNum)
-                    const isSelected =
-                      frameSelection?.layerIds.includes(layer.id) &&
-                      frameNum >= (frameSelection?.startFrame ?? 0) &&
-                      frameNum <= (frameSelection?.endFrame ?? 0)
-                    // In-progress drag selection
-                    const isInDragSelect = (() => {
-                      const start = frameSelectStartRef.current
-                      const end = frameSelectEnd
-                      if (!start || !end) return false
-                      const minF = Math.min(start.frame, end.frame)
-                      const maxF = Math.max(start.frame, end.frame)
-                      const minL = Math.min(start.layerIdx, end.layerIdx)
-                      const maxL = Math.max(start.layerIdx, end.layerIdx)
-                      return frameNum >= minF && frameNum <= maxF && layerIdx >= minL && layerIdx <= maxL
-                    })()
-                    return (
-                      <div
-                        key={i}
-                        className={[
-                          'timeline-frame-cell',
-                          frameNum % 5 === 0 && 'fifth',
-                          frameType,
-                          frameNum === currentFrame && 'current',
-                          (isSelected || isInDragSelect) && 'selected',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                      />
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
           </div>
+          {/* Layer rows */}
+          {project.layers.map((layer, layerIdx) => (
+            <div key={layer.id}>
+              {timelineLayerDrag && timelineLayerDropIdx === layerIdx && (
+                <div className="timeline-layer-drop-indicator" />
+              )}
+              <div className="timeline-row">
+              <div
+                className={[
+                  'timeline-layer',
+                  selectedLayerIds.includes(layer.id) && 'active',
+                  timelineLayerDrag && selectedLayerIds.includes(layer.id) && 'dragging',
+                ].filter(Boolean).join(' ')}
+                draggable
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (e.shiftKey) {
+                    // Select range from active layer to this one
+                    const s = useStore.getState()
+                    const activeIdx = project.layers.findIndex((l) => l.id === s.activeLayerId)
+                    const minIdx = Math.min(activeIdx, layerIdx)
+                    const maxIdx = Math.max(activeIdx, layerIdx)
+                    setSelectedLayerIds(project.layers.slice(minIdx, maxIdx + 1).map((l) => l.id))
+                  } else if (e.ctrlKey || e.metaKey) {
+                    useStore.getState().toggleSelectedLayerId(layer.id)
+                  } else {
+                    setSelectedLayerIds([layer.id])
+                  }
+                  setActiveLayerId(layer.id)
+                  useStore.getState().setInspectorFocus('layer')
+                }}
+                onDragStart={(e) => {
+                  if (!selectedLayerIds.includes(layer.id)) {
+                    setSelectedLayerIds([layer.id])
+                    setActiveLayerId(layer.id)
+                  }
+                  setTimelineLayerDrag(layer.id)
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/plain', layer.id)
+                }}
+                onDragEnd={() => { setTimelineLayerDrag(null); setTimelineLayerDropIdx(null) }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  if (timelineLayerDrag) {
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    const midY = rect.top + rect.height / 2
+                    setTimelineLayerDropIdx(e.clientY < midY ? layerIdx : layerIdx + 1)
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (!timelineLayerDrag) return
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const midY = rect.top + rect.height / 2
+                  const idx = e.clientY < midY ? layerIdx : layerIdx + 1
+                  const s = useStore.getState()
+                  if (s.selectedLayerIds.length > 1 && s.selectedLayerIds.includes(timelineLayerDrag)) {
+                    s.reorderLayers(s.selectedLayerIds, idx)
+                  } else {
+                    reorderLayer(timelineLayerDrag, idx)
+                  }
+                  setTimelineLayerDrag(null)
+                  setTimelineLayerDropIdx(null)
+                }}
+              >
+                <span className="timeline-layer-icon">■</span>
+                <span className="timeline-layer-name">{layer.name}</span>
+                <div className="timeline-layer-actions">
+                  <button
+                    title="Toggle visibility"
+                    style={{ opacity: layer.visible ? 1 : 0.3 }}
+                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id) }}
+                  >
+                    👁
+                  </button>
+                  <button
+                    title="Toggle lock"
+                    onClick={(e) => { e.stopPropagation(); toggleLayerLocked(layer.id) }}
+                  >
+                    {layer.locked ? '🔒' : '🔓'}
+                  </button>
+                </div>
+              </div>
+              <div className="timeline-frame-row">
+                {Array.from({ length: project.totalFrames }, (_, i) => {
+                  const frameNum = i + 1
+                  const frameType = getFrameType(layer, frameNum)
+                  const isSelected =
+                    frameSelection?.layerIds.includes(layer.id) &&
+                    frameNum >= (frameSelection?.startFrame ?? 0) &&
+                    frameNum <= (frameSelection?.endFrame ?? 0)
+                  const isInDragSelect = (() => {
+                    const start = frameSelectStartRef.current
+                    const end = frameSelectEnd
+                    if (!start || !end) return false
+                    const minF = Math.min(start.frame, end.frame)
+                    const maxF = Math.max(start.frame, end.frame)
+                    const minL = Math.min(start.layerIdx, end.layerIdx)
+                    const maxL = Math.max(start.layerIdx, end.layerIdx)
+                    return frameNum >= minF && frameNum <= maxF && layerIdx >= minL && layerIdx <= maxL
+                  })()
+                  return (
+                    <div
+                      key={i}
+                      className={[
+                        'timeline-frame-cell',
+                        frameNum % 5 === 0 && 'fifth',
+                        frameType,
+                        frameNum === currentFrame && 'current',
+                        (isSelected || isInDragSelect) && 'selected',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    />
+                  )
+                })}
+              </div>
+              </div>
+            </div>
+          ))}
+          {timelineLayerDrag && timelineLayerDropIdx === project.layers.length && (
+            <div className="timeline-layer-drop-indicator" />
+          )}
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
-import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard } from './types/project'
+import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard, FrameClipboardLayer, FrameClipboardEntry } from './types/project'
 import { recenterPath } from './lib/transform'
 import { resolveFrame } from './lib/interpolate'
 
@@ -23,6 +23,8 @@ interface EditorState {
   pasteObjects: () => void
   copyFrames: () => void
   pasteFrames: () => void
+  copyLayers: () => void
+  pasteLayers: () => void
 
   // Playback
   currentFrame: number
@@ -38,13 +40,16 @@ interface EditorState {
   // Selection
   activeLayerId: string
   setActiveLayerId: (id: string) => void
+  selectedLayerIds: string[]
+  setSelectedLayerIds: (ids: string[]) => void
+  toggleSelectedLayerId: (id: string) => void
   frameSelection: FrameSelection | null
   setFrameSelection: (sel: FrameSelection | null) => void
   selectedObjectIds: string[]
   setSelectedObjectIds: (ids: string[]) => void
   toggleSelectedObjectId: (id: string) => void
-  inspectorFocus: 'canvas' | 'timeline'
-  setInspectorFocus: (focus: 'canvas' | 'timeline') => void
+  inspectorFocus: 'canvas' | 'timeline' | 'layer'
+  setInspectorFocus: (focus: 'canvas' | 'timeline' | 'layer') => void
 
   // Viewport
   zoom: number
@@ -71,11 +76,14 @@ interface EditorState {
   insertBlankKeyframe: (layerId: string, frame: number) => void
   reorderObject: (layerId: string, objectId: string, newIndex: number) => void
   moveObjectToLayer: (objectId: string, fromLayerId: string, toLayerId: string, insertIndex: number) => void
+  addLayer: () => void
   reorderLayer: (layerId: string, newIndex: number) => void
+  reorderLayers: (layerIds: string[], newIndex: number) => void
   deleteSelectedObjects: () => void
   deleteKeyframe: (layerId: string, frame: number) => void
   deleteFrameSelection: () => void
   deleteLayer: (layerId: string) => void
+  deleteSelectedLayers: () => void
 }
 
 function createDemoProject(): Project {
@@ -282,12 +290,12 @@ export const useStore = create<EditorState>((set) => ({
     if (!s.frameSelection) return
     const { layerIds, startFrame, endFrame } = s.frameSelection
     const frameCount = endFrame - startFrame + 1
-    const clipLayers: import('./types/project').FrameClipboardLayer[] = []
+    const clipLayers: FrameClipboardLayer[] = []
 
     for (const layerId of layerIds) {
       const layer = s.project.layers.find((l: Layer) => l.id === layerId)
       if (!layer) { clipLayers.push({ frames: {} }); continue }
-      const frames: Record<number, import('./types/project').FrameClipboardEntry> = {}
+      const frames: Record<number, FrameClipboardEntry> = {}
       for (let f = startFrame; f <= endFrame; f++) {
         const offset = f - startFrame
         const kf = layer.keyframes.find((k: Keyframe) => k.frame === f)
@@ -362,6 +370,41 @@ export const useStore = create<EditorState>((set) => ({
       project,
     })
   },
+  copyLayers: () => {
+    const s = useStore.getState()
+    if (s.selectedLayerIds.length === 0) return
+    const layerSet = new Set(s.selectedLayerIds)
+    const layers = s.project.layers.filter((l: Layer) => layerSet.has(l.id))
+    set({ clipboard: { type: 'layers', layers: JSON.parse(JSON.stringify(layers)) } })
+  },
+  pasteLayers: () => {
+    const s: EditorState = useStore.getState()
+    if (s.clipboard.type !== 'layers') return
+    const activeIdx = s.project.layers.findIndex((l: Layer) => l.id === s.activeLayerId)
+    if (activeIdx === -1) return
+    // Deep clone and regenerate all IDs
+    const newLayers: Layer[] = s.clipboard.layers.map((layer: Layer) => {
+      const idRemap = new Map<string, string>()
+      const newLayer: Layer = JSON.parse(JSON.stringify(layer))
+      newLayer.id = generateId()
+      newLayer.name = layer.name + ' copy'
+      for (const kf of newLayer.keyframes) {
+        for (const obj of kf.objects) {
+          if (!idRemap.has(obj.id)) idRemap.set(obj.id, generateId())
+          obj.id = idRemap.get(obj.id)!
+        }
+      }
+      return newLayer
+    })
+    const layers = [...s.project.layers]
+    layers.splice(activeIdx + 1, 0, ...newLayers)
+    set({
+      ...pushUndo(s),
+      project: { ...s.project, layers },
+      activeLayerId: newLayers[0].id,
+      selectedLayerIds: newLayers.map((l: Layer) => l.id),
+    })
+  },
 
   currentFrame: 1,
   setCurrentFrame: (currentFrame) => set({ currentFrame }),
@@ -403,6 +446,14 @@ export const useStore = create<EditorState>((set) => ({
 
   activeLayerId: initialProject.layers[0].id,
   setActiveLayerId: (activeLayerId) => set({ activeLayerId }),
+  selectedLayerIds: [initialProject.layers[0].id],
+  setSelectedLayerIds: (selectedLayerIds) => set({ selectedLayerIds }),
+  toggleSelectedLayerId: (id) =>
+    set((state) => ({
+      selectedLayerIds: state.selectedLayerIds.includes(id)
+        ? state.selectedLayerIds.filter((lid) => lid !== id)
+        : [...state.selectedLayerIds, id],
+    })),
   frameSelection: null,
   setFrameSelection: (frameSelection) => set({ frameSelection }),
   selectedObjectIds: [],
@@ -688,14 +739,55 @@ export const useStore = create<EditorState>((set) => ({
       }
     }),
 
+  addLayer: () =>
+    set((state) => {
+      const activeIdx = state.project.layers.findIndex((l: Layer) => l.id === state.activeLayerId)
+      const insertAt = activeIdx === -1 ? state.project.layers.length : activeIdx + 1
+      // Generate unique name
+      const existingNames = new Set(state.project.layers.map((l: Layer) => l.name))
+      let name = 'Layer'
+      let n = 1
+      while (existingNames.has(name)) { n++; name = `Layer ${n}` }
+      const newLayer = createLayer(name)
+      const layers = [...state.project.layers]
+      layers.splice(insertAt, 0, newLayer)
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, layers },
+        activeLayerId: newLayer.id,
+        selectedLayerIds: [newLayer.id],
+      }
+    }),
+
   reorderLayer: (layerId, newIndex) =>
     set((state) => {
       const idx = state.project.layers.findIndex((l: Layer) => l.id === layerId)
       if (idx === -1 || idx === newIndex) return state
       const layers = [...state.project.layers]
       const [layer] = layers.splice(idx, 1)
-      const insertAt = Math.min(newIndex, layers.length)
+      // Adjust: removing source shifts indices above it down by 1
+      const adjustedIndex = idx < newIndex ? newIndex - 1 : newIndex
+      const insertAt = Math.min(adjustedIndex, layers.length)
       layers.splice(insertAt, 0, layer)
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, layers },
+      }
+    }),
+
+  reorderLayers: (layerIds, newIndex) =>
+    set((state) => {
+      const idSet = new Set(layerIds)
+      // Count how many selected layers sit above the target index
+      const aboveCount = state.project.layers.filter(
+        (l: Layer, i: number) => idSet.has(l.id) && i < newIndex,
+      ).length
+      const remaining = state.project.layers.filter((l: Layer) => !idSet.has(l.id))
+      // Preserve order of selected layers as they appear in the project
+      const moving = state.project.layers.filter((l: Layer) => idSet.has(l.id))
+      const insertAt = Math.min(newIndex - aboveCount, remaining.length)
+      const layers = [...remaining]
+      layers.splice(insertAt, 0, ...moving)
       return {
         ...pushUndo(state),
         project: { ...state.project, layers },
@@ -776,13 +868,30 @@ export const useStore = create<EditorState>((set) => ({
 
   deleteLayer: (layerId) =>
     set((state) => {
-      if (state.project.layers.length <= 1) return state // don't delete last layer
+      if (state.project.layers.length <= 1) return state
       const layers = state.project.layers.filter((l: Layer) => l.id !== layerId)
       const newActiveId = state.activeLayerId === layerId ? layers[0].id : state.activeLayerId
       return {
         ...pushUndo(state),
         project: { ...state.project, layers },
         activeLayerId: newActiveId,
+        selectedLayerIds: [newActiveId],
+        frameSelection: null,
+        selectedObjectIds: [],
+      }
+    }),
+
+  deleteSelectedLayers: () =>
+    set((state) => {
+      const idSet = new Set(state.selectedLayerIds)
+      const remaining = state.project.layers.filter((l: Layer) => !idSet.has(l.id))
+      if (remaining.length === 0) return state // don't delete all layers
+      const newActiveId = idSet.has(state.activeLayerId) ? remaining[0].id : state.activeLayerId
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, layers: remaining },
+        activeLayerId: newActiveId,
+        selectedLayerIds: [newActiveId],
         frameSelection: null,
         selectedObjectIds: [],
       }

@@ -67,6 +67,7 @@ export interface FrameClipboardGrid {
 export type Clipboard =
   | { type: 'objects'; layerId: string; objects: FlickObject[] }
   | { type: 'frames'; grid: FrameClipboardGrid }
+  | { type: 'layers'; layers: Layer[] }
 
 export function getSingleSelectedKeyframe(sel: FrameSelection | null): { layerId: string; frame: number } | null {
   if (!sel || sel.layerIds.length !== 1 || sel.startFrame !== sel.endFrame) return null
