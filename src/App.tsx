@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
 import { useStore } from './store'
-import { getActiveKeyframe, getNextKeyframe, generateId } from './types/project'
+import { getActiveKeyframe, getNextKeyframe, generateId, getSingleSelectedKeyframe } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
 import { dragAttrs, computeScale, computeRotationAttrs } from './lib/transform'
@@ -63,8 +63,8 @@ function App() {
   const setCurrentFrame = useStore((s) => s.setCurrentFrame)
   const activeLayerId = useStore((s) => s.activeLayerId)
   const setActiveLayerId = useStore((s) => s.setActiveLayerId)
-  const selectedKeyframe = useStore((s) => s.selectedKeyframe)
-  const setSelectedKeyframe = useStore((s) => s.setSelectedKeyframe)
+  const frameSelection = useStore((s) => s.frameSelection)
+  const setFrameSelection = useStore((s) => s.setFrameSelection)
   const zoom = useStore((s) => s.zoom)
   const setZoom = useStore((s) => s.setZoom)
   const pan = useStore((s) => s.pan)
@@ -160,12 +160,22 @@ function App() {
       // Copy/Paste
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         e.preventDefault()
-        useStore.getState().copySelectedObjects()
+        const s = useStore.getState()
+        if (s.frameSelection) {
+          s.copyFrames()
+        } else if (s.selectedObjectIds.length > 0) {
+          s.copySelectedObjects()
+        }
         return
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         e.preventDefault()
-        useStore.getState().pasteObjects()
+        const s = useStore.getState()
+        if (s.clipboard.type === 'frames') {
+          s.pasteFrames()
+        } else {
+          s.pasteObjects()
+        }
         return
       }
 
@@ -173,14 +183,15 @@ function App() {
       if (e.key === 'F6' || e.key === 'F7') {
         e.preventDefault()
         const s = useStore.getState()
-        const layerId = s.selectedKeyframe?.layerId ?? s.activeLayerId
+        const sel = getSingleSelectedKeyframe(s.frameSelection)
+        const layerId = sel?.layerId ?? s.activeLayerId
         if (layerId) {
           if (e.key === 'F6') {
             s.insertKeyframe(layerId, s.currentFrame)
           } else {
             s.insertBlankKeyframe(layerId, s.currentFrame)
           }
-          s.setSelectedKeyframe({ layerId, frame: s.currentFrame })
+          s.setFrameSelection({ layerIds: [layerId], startFrame: s.currentFrame, endFrame: s.currentFrame })
         }
         return
       }
@@ -191,12 +202,9 @@ function App() {
         const s = useStore.getState()
         if (s.inspectorFocus === 'canvas' && s.selectedObjectIds.length > 0) {
           s.deleteSelectedObjects()
-        } else if (s.inspectorFocus === 'timeline' && s.selectedKeyframe) {
-          const layer = s.project.layers.find((l) => l.id === s.selectedKeyframe!.layerId)
-          const isKf = layer?.keyframes.some((kf) => kf.frame === s.selectedKeyframe!.frame)
-          if (isKf) {
-            s.deleteKeyframe(s.selectedKeyframe.layerId, s.selectedKeyframe.frame)
-          }
+        } else if (s.inspectorFocus === 'timeline' && s.frameSelection) {
+          // Works for both single and multi-frame selections
+          s.deleteFrameSelection()
         } else {
           // Default: delete active layer
           s.deleteLayer(s.activeLayerId)
@@ -266,8 +274,7 @@ function App() {
   const isBoxSelectingRef = useRef(false)
   const boxSelectStartRef = useRef({ x: 0, y: 0 })
 
-  // Timeline scrub
-  const isScrubbing = useRef(false)
+  // Timeline
   const scrubWrapperRef = useRef<HTMLDivElement>(null)
   const layersRef = useRef<HTMLDivElement>(null)
 
@@ -646,49 +653,108 @@ function App() {
   }, [dragPreview, scalePreview, rotatePreview, drawPreview, boxSelectRect])
 
   // Timeline scrubbing
-  const scrubToX = useCallback(
-    (clientX: number) => {
+  const isFrameSelectingRef = useRef(false)
+  const frameSelectStartRef = useRef<{ layerIdx: number; frame: number } | null>(null)
+  const [frameSelectEnd, setFrameSelectEnd] = useState<{ layerIdx: number; frame: number } | null>(null)
+  const frameSelectEndRef = useRef(frameSelectEnd)
+  frameSelectEndRef.current = frameSelectEnd
+  const frameSelectShiftRef = useRef(false)
+
+  /** Compute frame number from mouse X on the frames wrapper. */
+  const frameFromX = useCallback(
+    (ev: MouseEvent | React.MouseEvent) => {
       const wrapper = scrubWrapperRef.current
-      if (!wrapper) return
+      if (!wrapper) return null
       const rect = wrapper.getBoundingClientRect()
-      const x = clientX - rect.left + wrapper.scrollLeft
-      const frame = Math.max(1, Math.min(project.totalFrames, Math.floor(x / 16) + 1))
-      setCurrentFrame(frame)
+      const x = ev.clientX - rect.left + wrapper.scrollLeft
+      return Math.max(1, Math.min(project.totalFrames, Math.floor(x / 16) + 1))
     },
-    [setCurrentFrame, project.totalFrames],
+    [project.totalFrames],
   )
 
-  const handleScrubDown = useCallback(
+  /** Compute cell { layerIdx, frame } from mouse event. Returns null if on frame numbers row. */
+  const cellFromEvent = useCallback(
+    (ev: MouseEvent | React.MouseEvent) => {
+      const wrapper = scrubWrapperRef.current
+      if (!wrapper) return null
+      const rect = wrapper.getBoundingClientRect()
+      const y = ev.clientY - rect.top + wrapper.scrollTop - 20
+      if (y < 0) return null
+      const frame = frameFromX(ev)
+      if (!frame) return null
+      const layerIdx = Math.max(0, Math.min(project.layers.length - 1, Math.floor(y / 28)))
+      return { layerIdx, frame }
+    },
+    [project.layers.length, frameFromX],
+  )
+
+  const handleTimelineMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      isScrubbing.current = true
-      setSelectedKeyframe(null)
-      scrubToX(e.clientX)
+      const cell = cellFromEvent(e)
+
+      if (!cell) {
+        // Clicked on frame numbers row — scrub playhead
+        const frame = frameFromX(e)
+        if (!frame) return
+        setCurrentFrame(frame)
+        const onMove = (ev: MouseEvent) => {
+          const f = frameFromX(ev)
+          if (f) useStore.getState().setCurrentFrame(f)
+        }
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove)
+          document.removeEventListener('mouseup', onUp)
+        }
+        document.addEventListener('mousemove', onMove)
+        document.addEventListener('mouseup', onUp)
+        return
+      }
+
+      // Clear previous selection immediately
+      setFrameSelection(null)
+
+      isFrameSelectingRef.current = true
+      frameSelectStartRef.current = cell
+      frameSelectShiftRef.current = e.shiftKey
+      setFrameSelectEnd(cell)
+
+      // Move playhead immediately (unless shift)
+      if (!e.shiftKey) {
+        setCurrentFrame(cell.frame)
+        setActiveLayerId(project.layers[cell.layerIdx].id)
+      }
 
       const onMove = (ev: MouseEvent) => {
-        if (!isScrubbing.current) return
-        scrubToX(ev.clientX)
+        if (!isFrameSelectingRef.current) return
+        const end = cellFromEvent(ev)
+        if (end) setFrameSelectEnd(end)
       }
       const onUp = () => {
-        isScrubbing.current = false
+        isFrameSelectingRef.current = false
+        const start = frameSelectStartRef.current
+        const end = frameSelectEndRef.current
+        if (start && end) {
+          const minFrame = Math.min(start.frame, end.frame)
+          const maxFrame = Math.max(start.frame, end.frame)
+          const minLayer = Math.min(start.layerIdx, end.layerIdx)
+          const maxLayer = Math.max(start.layerIdx, end.layerIdx)
+          const layers = useStore.getState().project.layers
+          const layerIds = layers.slice(minLayer, maxLayer + 1).map(l => l.id)
+          useStore.getState().setFrameSelection({ layerIds, startFrame: minFrame, endFrame: maxFrame })
+          useStore.getState().setInspectorFocus('timeline')
+          if (!frameSelectShiftRef.current) {
+            useStore.getState().setCurrentFrame(minFrame)
+            useStore.getState().setActiveLayerId(layerIds[0])
+          }
+        }
+        setFrameSelectEnd(null)
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
       }
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
     },
-    [scrubToX, setSelectedKeyframe],
-  )
-
-  // Timeline cell click — select frame (and keyframe if applicable)
-  const handleCellClick = useCallback(
-    (layerId: string, frame: number, _isKeyframe: boolean, e: React.MouseEvent) => {
-      e.stopPropagation()
-      setSelectedKeyframe({ layerId, frame })
-      setCurrentFrame(frame)
-      setActiveLayerId(layerId)
-      useStore.getState().setInspectorFocus('timeline')
-    },
-    [setSelectedKeyframe, setCurrentFrame],
+    [cellFromEvent, frameFromX, setCurrentFrame, setActiveLayerId, setFrameSelection, project.layers],
   )
 
   return (
@@ -784,7 +850,7 @@ function App() {
                                   setSelectedObjectIds([obj.id])
                                 }
                                 setActiveLayerId(layer.id)
-                                setSelectedKeyframe(null)
+                                setFrameSelection(null)
                                 useStore.getState().setInspectorFocus('canvas')
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
@@ -803,7 +869,7 @@ function App() {
                                   setSelectedObjectIds([obj.id])
                                 }
                                 setActiveLayerId(layer.id)
-                                setSelectedKeyframe(null)
+                                setFrameSelection(null)
                               } : undefined}
                             />
                           ))}
@@ -1053,7 +1119,7 @@ function App() {
           <div
             className="timeline-frames-wrapper"
             ref={scrubWrapperRef}
-            onMouseDown={handleScrubDown}
+            onMouseDown={handleTimelineMouseDown}
             onScroll={(e) => {
               if (layersRef.current) {
                 layersRef.current.scrollTop = e.currentTarget.scrollTop
@@ -1071,15 +1137,26 @@ function App() {
               ))}
             </div>
             <div className="timeline-frames-rows">
-              {project.layers.map((layer) => (
+              {project.layers.map((layer, layerIdx) => (
                 <div key={layer.id} className="timeline-frame-row">
                   {Array.from({ length: project.totalFrames }, (_, i) => {
                     const frameNum = i + 1
                     const frameType = getFrameType(layer, frameNum)
-                    const isKf = frameType === 'keyframe' || frameType === 'keyframe-empty'
                     const isSelected =
-                      selectedKeyframe?.layerId === layer.id &&
-                      selectedKeyframe?.frame === frameNum
+                      frameSelection?.layerIds.includes(layer.id) &&
+                      frameNum >= (frameSelection?.startFrame ?? 0) &&
+                      frameNum <= (frameSelection?.endFrame ?? 0)
+                    // In-progress drag selection
+                    const isInDragSelect = (() => {
+                      const start = frameSelectStartRef.current
+                      const end = frameSelectEnd
+                      if (!start || !end) return false
+                      const minF = Math.min(start.frame, end.frame)
+                      const maxF = Math.max(start.frame, end.frame)
+                      const minL = Math.min(start.layerIdx, end.layerIdx)
+                      const maxL = Math.max(start.layerIdx, end.layerIdx)
+                      return frameNum >= minF && frameNum <= maxF && layerIdx >= minL && layerIdx <= maxL
+                    })()
                     return (
                       <div
                         key={i}
@@ -1088,11 +1165,10 @@ function App() {
                           frameNum % 5 === 0 && 'fifth',
                           frameType,
                           frameNum === currentFrame && 'current',
-                          isSelected && 'selected',
+                          (isSelected || isInDragSelect) && 'selected',
                         ]
                           .filter(Boolean)
                           .join(' ')}
-                        onClick={(e) => handleCellClick(layer.id, frameNum, isKf, e)}
                       />
                     )
                   })}

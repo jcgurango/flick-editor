@@ -156,8 +156,12 @@
   width: var(--timeline-layer-width);
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  overflow-y: hidden;
+  overflow-y: auto;
   background: var(--bg-panel-alt);
+  scrollbar-width: none;
+}
+.timeline-layers::-webkit-scrollbar {
+  display: none;
 }
 
 .timeline-layers-header {
@@ -169,6 +173,9 @@
   background: var(--timeline-header);
   border-bottom: 1px solid var(--border);
   font-size: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .timeline-layers-title {

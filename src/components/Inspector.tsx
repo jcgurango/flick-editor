@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import type { TweenType, EaseDirection } from '../types/project'
+import { getSingleSelectedKeyframe } from '../types/project'
 import { OBJECT_FIELDS, TYPE_NAMES } from '../lib/inspector-schema'
 import { InspectorField } from './InspectorField'
 import './Inspector.css'
@@ -60,7 +61,7 @@ function TweenSection({ layerId, kf }: { layerId: string; kf: { frame: number; t
 
 export function Inspector() {
   const project = useStore((s) => s.project)
-  const selectedKeyframe = useStore((s) => s.selectedKeyframe)
+  const frameSelection = useStore((s) => s.frameSelection)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const activeLayerId = useStore((s) => s.activeLayerId)
   const currentFrame = useStore((s) => s.currentFrame)
@@ -74,11 +75,12 @@ export function Inspector() {
     ? activeKf.objects.find((o) => o.id === selectedObjectIds[0])
     : null
 
-  // Resolve keyframe data for timeline selection
-  const selectedKfData = selectedKeyframe
+  // Resolve keyframe data for single-cell timeline selection
+  const singleSel = getSingleSelectedKeyframe(frameSelection)
+  const selectedKfData = singleSel
     ? (() => {
-        const layer = project.layers.find((l) => l.id === selectedKeyframe.layerId)
-        const kf = layer?.keyframes.find((k) => k.frame === selectedKeyframe.frame)
+        const layer = project.layers.find((l) => l.id === singleSel.layerId)
+        const kf = layer?.keyframes.find((k) => k.frame === singleSel.frame)
         return kf ? { layer: layer!, kf } : null
       })()
     : null
@@ -135,21 +137,44 @@ export function Inspector() {
   }
 
   // Timeline focus: show keyframe/frame info
-  if (inspectorFocus === 'timeline' && selectedKfData) {
-    return (
-      <div className="inspector">
-        <div className="inspector-section">
-          <div className="inspector-section-title">
-            Keyframe — Frame {selectedKfData.kf.frame}
+  if (inspectorFocus === 'timeline' && frameSelection) {
+    if (selectedKfData) {
+      // Single-cell selection with a keyframe
+      return (
+        <div className="inspector">
+          <div className="inspector-section">
+            <div className="inspector-section-title">
+              Keyframe — Frame {selectedKfData.kf.frame}
+            </div>
+            <div className="inspector-section-subtitle">
+              {selectedKfData.layer.name}
+            </div>
           </div>
-          <div className="inspector-section-subtitle">
-            {selectedKfData.layer.name}
+
+          <TweenSection layerId={selectedKfData.layer.id} kf={selectedKfData.kf} />
+        </div>
+      )
+    }
+
+    // Multi-frame or non-keyframe selection summary
+    const frameCount = frameSelection.endFrame - frameSelection.startFrame + 1
+    const layerCount = frameSelection.layerIds.length
+    if (frameCount > 1 || layerCount > 1) {
+      return (
+        <div className="inspector">
+          <div className="inspector-section">
+            <div className="inspector-section-title">Frame Selection</div>
+            <div className="inspector-section-subtitle">
+              {layerCount} layer{layerCount > 1 ? 's' : ''}, {frameCount} frame{frameCount > 1 ? 's' : ''}
+            </div>
+            <div className="inspector-row">
+              <span className="inspector-label">Frames</span>
+              <span>{frameSelection.startFrame}–{frameSelection.endFrame}</span>
+            </div>
           </div>
         </div>
-
-        <TweenSection layerId={selectedKfData.layer.id} kf={selectedKfData.kf} />
-      </div>
-    )
+      )
+    }
   }
 
   // Default: scene + layer properties

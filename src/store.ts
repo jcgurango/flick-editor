@@ -1,13 +1,8 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
-import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject } from './types/project'
+import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard } from './types/project'
 import { recenterPath } from './lib/transform'
 import { resolveFrame } from './lib/interpolate'
-
-export interface SelectedKeyframe {
-  layerId: string
-  frame: number
-}
 
 const MAX_UNDO = 100
 
@@ -23,9 +18,11 @@ interface EditorState {
   redo: () => void
 
   // Clipboard
-  clipboard: { layerId: string; objects: FlickObject[] }
+  clipboard: Clipboard
   copySelectedObjects: () => void
   pasteObjects: () => void
+  copyFrames: () => void
+  pasteFrames: () => void
 
   // Playback
   currentFrame: number
@@ -41,8 +38,8 @@ interface EditorState {
   // Selection
   activeLayerId: string
   setActiveLayerId: (id: string) => void
-  selectedKeyframe: SelectedKeyframe | null
-  setSelectedKeyframe: (kf: SelectedKeyframe | null) => void
+  frameSelection: FrameSelection | null
+  setFrameSelection: (sel: FrameSelection | null) => void
   selectedObjectIds: string[]
   setSelectedObjectIds: (ids: string[]) => void
   toggleSelectedObjectId: (id: string) => void
@@ -77,6 +74,7 @@ interface EditorState {
   reorderLayer: (layerId: string, newIndex: number) => void
   deleteSelectedObjects: () => void
   deleteKeyframe: (layerId: string, frame: number) => void
+  deleteFrameSelection: () => void
   deleteLayer: (layerId: string) => void
 }
 
@@ -219,7 +217,7 @@ export const useStore = create<EditorState>((set) => ({
     }),
 
   // Clipboard
-  clipboard: { layerId: '', objects: [] },
+  clipboard: { type: 'objects', layerId: '', objects: [] },
   copySelectedObjects: () => {
     const s = useStore.getState()
     const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
@@ -227,21 +225,35 @@ export const useStore = create<EditorState>((set) => ({
     if (!layer || !kf) return
     const objs = kf.objects.filter((o) => s.selectedObjectIds.includes(o.id))
     if (objs.length === 0) return
-    // Deep clone with source layer
-    set({ clipboard: { layerId: layer.id, objects: JSON.parse(JSON.stringify(objs)) } })
+    set({ clipboard: { type: 'objects', layerId: layer.id, objects: JSON.parse(JSON.stringify(objs)) } })
   },
   pasteObjects: () => {
     const s: EditorState = useStore.getState()
-    if (s.clipboard.objects.length === 0) return
+    if (s.clipboard.type !== 'objects' || s.clipboard.objects.length === 0) return
     const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
-    const kf = layer?.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
-    if (!layer || !kf) return
+    if (!layer) return
+
+    // Auto-create keyframe if none exists at current frame (like F6)
+    let project = s.project
+    let kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) {
+      const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(layer, s.currentFrame)))
+      kf = { frame: s.currentFrame, objects, tween: 'discrete', easeDirection: 'in-out' }
+      project = {
+        ...project,
+        layers: project.layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: [...l.keyframes, kf!].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
+          },
+        ),
+      }
+    }
 
     const sameLayer = s.clipboard.layerId === layer.id
     const existingIds = new Set(kf.objects.map((o: FlickObject) => o.id))
     const pasted: FlickObject[] = s.clipboard.objects.map((obj: FlickObject) => {
       const clone: FlickObject = JSON.parse(JSON.stringify(obj))
-      // Only preserve IDs when pasting to the same layer and no conflict
       if (!sameLayer || existingIds.has(clone.id)) {
         clone.id = generateId()
       }
@@ -249,12 +261,12 @@ export const useStore = create<EditorState>((set) => ({
     })
 
     const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) =>
+      ...project,
+      layers: project.layers.map((l: Layer) =>
         l.id !== layer.id ? l : {
           ...l,
           keyframes: l.keyframes.map((k: Keyframe) =>
-            k.frame !== kf.frame ? k : { ...k, objects: [...k.objects, ...pasted] },
+            k.frame !== s.currentFrame ? k : { ...k, objects: [...k.objects, ...pasted] },
           ),
         },
       ),
@@ -263,6 +275,91 @@ export const useStore = create<EditorState>((set) => ({
       ...pushUndo(s),
       project: newProject,
       selectedObjectIds: pasted.map((o: FlickObject) => o.id),
+    })
+  },
+  copyFrames: () => {
+    const s = useStore.getState()
+    if (!s.frameSelection) return
+    const { layerIds, startFrame, endFrame } = s.frameSelection
+    const frameCount = endFrame - startFrame + 1
+    const clipLayers: import('./types/project').FrameClipboardLayer[] = []
+
+    for (const layerId of layerIds) {
+      const layer = s.project.layers.find((l: Layer) => l.id === layerId)
+      if (!layer) { clipLayers.push({ frames: {} }); continue }
+      const frames: Record<number, import('./types/project').FrameClipboardEntry> = {}
+      for (let f = startFrame; f <= endFrame; f++) {
+        const offset = f - startFrame
+        const kf = layer.keyframes.find((k: Keyframe) => k.frame === f)
+        if (kf) {
+          frames[offset] = {
+            objects: JSON.parse(JSON.stringify(kf.objects)),
+            tween: kf.tween,
+            easeDirection: kf.easeDirection,
+          }
+        } else if (offset === 0) {
+          // First frame of range: resolve interpolated state
+          const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(layer, f)))
+          frames[offset] = { objects, tween: 'discrete', easeDirection: 'in-out' }
+        }
+      }
+      clipLayers.push({ frames })
+    }
+
+    set({ clipboard: { type: 'frames', grid: { layers: clipLayers, frameCount } } })
+  },
+  pasteFrames: () => {
+    const s: EditorState = useStore.getState()
+    if (s.clipboard.type !== 'frames') return
+    const { grid } = s.clipboard
+    const activeIdx = s.project.layers.findIndex((l: Layer) => l.id === s.activeLayerId)
+    if (activeIdx === -1) return
+
+    let project: Project = JSON.parse(JSON.stringify(s.project))
+
+    for (let li = 0; li < grid.layers.length; li++) {
+      const destIdx = activeIdx + li
+      if (destIdx >= project.layers.length) break
+      const destLayer = project.layers[destIdx]
+      const clipLayer = grid.layers[li]
+
+      for (let offset = 0; offset < grid.frameCount; offset++) {
+        const targetFrame = s.currentFrame + offset
+        if (targetFrame > project.totalFrames) break
+        const clipEntry = clipLayer.frames[offset]
+        if (!clipEntry) continue
+
+        // Ensure a keyframe exists at target frame
+        let kf = destLayer.keyframes.find((k: Keyframe) => k.frame === targetFrame)
+        if (!kf) {
+          const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(destLayer, targetFrame)))
+          kf = { frame: targetFrame, objects, tween: 'discrete', easeDirection: 'in-out' }
+          destLayer.keyframes.push(kf)
+          destLayer.keyframes.sort((a: Keyframe, b: Keyframe) => a.frame - b.frame)
+        }
+
+        // Overwrite tween settings
+        kf.tween = clipEntry.tween
+        kf.easeDirection = clipEntry.easeDirection
+
+        // Replace existing objects by ID, append only if no match exists
+        for (const obj of clipEntry.objects) {
+          const clone: FlickObject = JSON.parse(JSON.stringify(obj))
+          const existingIdx = kf.objects.findIndex((o: FlickObject) => o.id === clone.id)
+          if (existingIdx !== -1) {
+            // Replace in-place
+            kf.objects[existingIdx] = clone
+          } else {
+            // Append new object
+            kf.objects.push(clone)
+          }
+        }
+      }
+    }
+
+    set({
+      ...pushUndo(s),
+      project,
     })
   },
 
@@ -306,8 +403,8 @@ export const useStore = create<EditorState>((set) => ({
 
   activeLayerId: initialProject.layers[0].id,
   setActiveLayerId: (activeLayerId) => set({ activeLayerId }),
-  selectedKeyframe: null,
-  setSelectedKeyframe: (selectedKeyframe) => set({ selectedKeyframe }),
+  frameSelection: null,
+  setFrameSelection: (frameSelection) => set({ frameSelection }),
   selectedObjectIds: [],
   setSelectedObjectIds: (selectedObjectIds) => set({ selectedObjectIds }),
   toggleSelectedObjectId: (id) =>
@@ -651,7 +748,29 @@ export const useStore = create<EditorState>((set) => ({
             },
           ),
         },
-        selectedKeyframe: null,
+        frameSelection: null,
+      }
+    }),
+
+  deleteFrameSelection: () =>
+    set((state) => {
+      if (!state.frameSelection) return state
+      const { layerIds, startFrame, endFrame } = state.frameSelection
+      const layerSet = new Set(layerIds)
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) =>
+            !layerSet.has(l.id) ? l : {
+              ...l,
+              keyframes: l.keyframes.filter((kf: Keyframe) =>
+                kf.frame < startFrame || kf.frame > endFrame,
+              ),
+            },
+          ),
+        },
+        frameSelection: null,
       }
     }),
 
@@ -664,7 +783,7 @@ export const useStore = create<EditorState>((set) => ({
         ...pushUndo(state),
         project: { ...state.project, layers },
         activeLayerId: newActiveId,
-        selectedKeyframe: null,
+        frameSelection: null,
         selectedObjectIds: [],
       }
     }),

@@ -41,6 +41,38 @@ export interface Project {
   layers: Layer[]
 }
 
+// ── Frame Selection & Clipboard ──
+
+export interface FrameSelection {
+  layerIds: string[]
+  startFrame: number
+  endFrame: number
+}
+
+export interface FrameClipboardEntry {
+  objects: FlickObject[]
+  tween: TweenType
+  easeDirection: EaseDirection
+}
+
+export interface FrameClipboardLayer {
+  frames: Record<number, FrameClipboardEntry>
+}
+
+export interface FrameClipboardGrid {
+  layers: FrameClipboardLayer[]
+  frameCount: number
+}
+
+export type Clipboard =
+  | { type: 'objects'; layerId: string; objects: FlickObject[] }
+  | { type: 'frames'; grid: FrameClipboardGrid }
+
+export function getSingleSelectedKeyframe(sel: FrameSelection | null): { layerId: string; frame: number } | null {
+  if (!sel || sel.layerIds.length !== 1 || sel.startFrame !== sel.endFrame) return null
+  return { layerId: sel.layerIds[0], frame: sel.startFrame }
+}
+
 // ── Helpers ──
 
 let _nextId = 1
