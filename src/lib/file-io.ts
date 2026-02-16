@@ -157,11 +157,19 @@ export async function exportSvgSequence(project: Project): Promise<void> {
     return
   }
 
+  let dirHandle: FileSystemDirectoryHandle
   try {
-    const dirHandle = await window.showDirectoryPicker!({ mode: 'readwrite' })
+    dirHandle = await window.showDirectoryPicker!({ mode: 'readwrite' })
+  } catch {
+    return // User cancelled
+  }
+
+  const overlay = createProgressOverlay()
+  try {
     const totalDigits = String(project.totalFrames).length
 
     for (let f = 1; f <= project.totalFrames; f++) {
+      updateProgressOverlay(overlay, f, project.totalFrames)
       const svg = renderFrameToSvg(project, f)
       const name = `frame_${String(f).padStart(totalDigits, '0')}.svg`
       const fileHandle = await dirHandle.getFileHandle(name, { create: true })
@@ -170,10 +178,67 @@ export async function exportSvgSequence(project: Project): Promise<void> {
       await writable.close()
     }
 
-    alert(`Exported ${project.totalFrames} SVG frames.`)
-  } catch {
-    // User cancelled
+    updateProgressOverlay(overlay, project.totalFrames, project.totalFrames, true)
+    await new Promise((r) => setTimeout(r, 600))
+  } finally {
+    overlay.remove()
   }
+}
+
+// ── Progress overlay ──
+
+interface ProgressOverlay extends HTMLDivElement {
+  _bar: HTMLDivElement
+  _label: HTMLDivElement
+}
+
+function createProgressOverlay(): ProgressOverlay {
+  const overlay = document.createElement('div') as ProgressOverlay
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0', zIndex: '10000',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(0,0,0,0.6)',
+  })
+
+  const box = document.createElement('div')
+  Object.assign(box.style, {
+    background: '#282845', borderRadius: '8px', padding: '24px 32px',
+    minWidth: '300px', textAlign: 'center', color: '#e0e0f0',
+    fontFamily: 'inherit', fontSize: '13px',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+  })
+
+  const label = document.createElement('div')
+  label.textContent = 'Exporting...'
+  Object.assign(label.style, { marginBottom: '12px' })
+
+  const track = document.createElement('div')
+  Object.assign(track.style, {
+    height: '6px', borderRadius: '3px', background: '#3a3a5c', overflow: 'hidden',
+  })
+
+  const bar = document.createElement('div')
+  Object.assign(bar.style, {
+    height: '100%', width: '0%', borderRadius: '3px',
+    background: '#4a7aff', transition: 'width 0.15s ease',
+  })
+
+  track.appendChild(bar)
+  box.appendChild(label)
+  box.appendChild(track)
+  overlay.appendChild(box)
+  overlay._bar = bar
+  overlay._label = label
+  document.body.appendChild(overlay)
+  return overlay
+}
+
+function updateProgressOverlay(overlay: ProgressOverlay, current: number, total: number, done = false) {
+  const pct = Math.round((current / total) * 100)
+  overlay._bar.style.width = `${pct}%`
+  overlay._label.textContent = done
+    ? `Exported ${total} frames`
+    : `Exporting frame ${current} / ${total}`
 }
 
 // ── Validation ──
