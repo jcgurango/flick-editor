@@ -1,9 +1,8 @@
 /* Inspector panel */
 .inspector {
-  width: var(--inspector-width);
+  width: 100%;
+  height: 100%;
   background: var(--bg-panel);
-  border-left: 1px solid var(--border);
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;

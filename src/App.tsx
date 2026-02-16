@@ -88,6 +88,40 @@ function App() {
   // Box select marquee (canvas-space coordinates)
   const [boxSelectRect, setBoxSelectRect] = useState<BBox | null>(null)
 
+  // Panel resize
+  const [timelineHeight, setTimelineHeight] = useState(200)
+  const [inspectorWidth, setInspectorWidth] = useState(240)
+
+  const handleTimelineResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = timelineHeight
+    const onMove = (ev: MouseEvent) => {
+      setTimelineHeight(Math.max(80, Math.min(600, startH - (ev.clientY - startY))))
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [timelineHeight])
+
+  const handleInspectorResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = inspectorWidth
+    const onMove = (ev: MouseEvent) => {
+      setInspectorWidth(Math.max(160, Math.min(500, startW - (ev.clientX - startX))))
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [inspectorWidth])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -828,12 +862,20 @@ function App() {
           )}
         </div>
 
+        {/* Inspector resize handle */}
+        <div className="resize-handle-v" onMouseDown={handleInspectorResize} />
+
         {/* Inspector */}
-        <Inspector />
+        <div style={{ width: inspectorWidth, flexShrink: 0 }}>
+          <Inspector />
+        </div>
       </div>
 
+      {/* Timeline resize handle */}
+      <div className="resize-handle-h" onMouseDown={handleTimelineResize} />
+
       {/* Timeline */}
-      <div className="timeline">
+      <div className="timeline" style={{ height: timelineHeight }}>
         <div className="timeline-toolbar">
           <button className="timeline-btn" title="Add Layer">+</button>
           <button className="timeline-btn" title="Delete Layer">−</button>
@@ -878,12 +920,6 @@ function App() {
               }
             }}
           >
-            {/* Playhead line */}
-            <div
-              className="timeline-playhead"
-              style={{ left: (currentFrame - 1) * 16 + 8 }}
-            />
-
             <div className="timeline-frame-numbers">
               {Array.from({ length: FRAME_COUNT }, (_, i) => (
                 <div
