@@ -87,24 +87,6 @@
   font-style: italic;
 }
 
-.inspector-object-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 0;
-  font-size: 11px;
-}
-
-.inspector-object-type {
-  color: var(--text-primary);
-  text-transform: capitalize;
-}
-
-.inspector-object-id {
-  color: var(--text-muted);
-  font-family: monospace;
-  font-size: 10px;
-}
 
 .inspector-toggle {
   height: 22px;

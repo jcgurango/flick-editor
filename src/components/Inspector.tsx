@@ -148,22 +148,6 @@ export function Inspector() {
         </div>
 
         <TweenSection layerId={selectedKfData.layer.id} kf={selectedKfData.kf} />
-
-        <div className="inspector-section">
-          <div className="inspector-section-title">
-            Objects ({selectedKfData.kf.objects.length})
-          </div>
-          {selectedKfData.kf.objects.length === 0 ? (
-            <div className="inspector-empty">No objects</div>
-          ) : (
-            selectedKfData.kf.objects.map((obj) => (
-              <div key={obj.id} className="inspector-object-row">
-                <span className="inspector-object-type">{obj.type}</span>
-                <span className="inspector-object-id">{obj.id.slice(-6)}</span>
-              </div>
-            ))
-          )}
-        </div>
       </div>
     )
   }

@@ -23,7 +23,7 @@ interface EditorState {
   redo: () => void
 
   // Clipboard
-  clipboard: FlickObject[]
+  clipboard: { layerId: string; objects: FlickObject[] }
   copySelectedObjects: () => void
   pasteObjects: () => void
 
@@ -72,6 +72,8 @@ interface EditorState {
   setAllLayersLocked: (locked: boolean) => void
   insertKeyframe: (layerId: string, frame: number) => void
   insertBlankKeyframe: (layerId: string, frame: number) => void
+  reorderObject: (layerId: string, objectId: string, newIndex: number) => void
+  moveObjectToLayer: (objectId: string, fromLayerId: string, toLayerId: string, insertIndex: number) => void
 }
 
 function createDemoProject(): Project {
@@ -213,28 +215,30 @@ export const useStore = create<EditorState>((set) => ({
     }),
 
   // Clipboard
-  clipboard: [],
+  clipboard: { layerId: '', objects: [] },
   copySelectedObjects: () => {
     const s = useStore.getState()
     const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
     const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
-    if (!kf) return
+    if (!layer || !kf) return
     const objs = kf.objects.filter((o) => s.selectedObjectIds.includes(o.id))
     if (objs.length === 0) return
-    // Deep clone
-    set({ clipboard: JSON.parse(JSON.stringify(objs)) })
+    // Deep clone with source layer
+    set({ clipboard: { layerId: layer.id, objects: JSON.parse(JSON.stringify(objs)) } })
   },
   pasteObjects: () => {
     const s: EditorState = useStore.getState()
-    if (s.clipboard.length === 0) return
+    if (s.clipboard.objects.length === 0) return
     const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
     const kf = layer?.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
     if (!layer || !kf) return
 
+    const sameLayer = s.clipboard.layerId === layer.id
     const existingIds = new Set(kf.objects.map((o: FlickObject) => o.id))
-    const pasted: FlickObject[] = s.clipboard.map((obj: FlickObject) => {
+    const pasted: FlickObject[] = s.clipboard.objects.map((obj: FlickObject) => {
       const clone: FlickObject = JSON.parse(JSON.stringify(obj))
-      if (existingIds.has(clone.id)) {
+      // Only preserve IDs when pasting to the same layer and no conflict
+      if (!sameLayer || existingIds.has(clone.id)) {
         clone.id = generateId()
       }
       return clone
@@ -509,6 +513,76 @@ export const useStore = create<EditorState>((set) => ({
               keyframes: [...l.keyframes, newKf].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
             },
           ),
+        },
+      }
+    }),
+
+  reorderObject: (layerId, objectId, newIndex) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((l: Layer) =>
+          l.id !== layerId ? l : {
+            ...l,
+            keyframes: l.keyframes.map((kf: Keyframe) => {
+              const idx = kf.objects.findIndex((o: FlickObject) => o.id === objectId)
+              if (idx === -1) return kf
+              const objs = [...kf.objects]
+              const [obj] = objs.splice(idx, 1)
+              const insertAt = Math.min(newIndex, objs.length)
+              objs.splice(insertAt, 0, obj)
+              return { ...kf, objects: objs }
+            }),
+          },
+        ),
+      },
+    })),
+
+  moveObjectToLayer: (objectId, fromLayerId, toLayerId, insertIndex) =>
+    set((state) => {
+      if (fromLayerId === toLayerId) return state
+      const fromLayer = state.project.layers.find((l: Layer) => l.id === fromLayerId)
+      if (!fromLayer) return state
+
+      // Collect object versions from each keyframe on source layer
+      const objByFrame = new Map<number, FlickObject>()
+      for (const kf of fromLayer.keyframes) {
+        const obj = kf.objects.find((o: FlickObject) => o.id === objectId)
+        if (obj) objByFrame.set(kf.frame, obj)
+      }
+      if (objByFrame.size === 0) return state
+
+      // Fallback object for frames where source didn't have this object
+      const fallbackObj = objByFrame.values().next().value!
+
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) => {
+            if (l.id === fromLayerId) {
+              return {
+                ...l,
+                keyframes: l.keyframes.map((kf: Keyframe) => ({
+                  ...kf,
+                  objects: kf.objects.filter((o: FlickObject) => o.id !== objectId),
+                })),
+              }
+            }
+            if (l.id === toLayerId) {
+              return {
+                ...l,
+                keyframes: l.keyframes.map((kf: Keyframe) => {
+                  const obj = objByFrame.get(kf.frame) ?? fallbackObj
+                  const objs = [...kf.objects]
+                  objs.splice(Math.min(insertIndex, objs.length), 0, obj)
+                  return { ...kf, objects: objs }
+                }),
+              }
+            }
+            return l
+          }),
         },
       }
     }),

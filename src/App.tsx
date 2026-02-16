@@ -11,6 +11,7 @@ import type { FlickObject } from './types/project'
 import { SvgObject } from './components/SvgObject'
 import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
+import { Hierarchy } from './components/Hierarchy'
 import './App.css'
 
 const ZOOM_SENSITIVITY = 1.1
@@ -910,9 +911,12 @@ function App() {
         {/* Inspector resize handle */}
         <div className="resize-handle-v" onMouseDown={handleInspectorResize} />
 
-        {/* Inspector */}
-        <div style={{ width: inspectorWidth, flexShrink: 0 }}>
-          <Inspector />
+        {/* Inspector + Hierarchy */}
+        <div style={{ width: inspectorWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <Inspector />
+          </div>
+          <Hierarchy />
         </div>
       </div>
 

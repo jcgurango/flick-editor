@@ -1,0 +1,108 @@
+.hierarchy {
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  flex-shrink: 0;
+  max-height: 50%;
+}
+
+.hierarchy-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  padding: 8px 12px 6px;
+}
+
+.hierarchy-layer-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.hierarchy-layer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.hierarchy-layer:hover {
+  background: var(--bg-hover);
+}
+
+.hierarchy-layer.active {
+  color: var(--text-primary);
+  background: var(--bg-active);
+}
+
+.hierarchy-layer-icon {
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.hierarchy-layer-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hierarchy-object-count {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.hierarchy-objects {
+  position: relative;
+}
+
+.hierarchy-object {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 24px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.hierarchy-object:hover {
+  background: var(--bg-hover);
+}
+
+.hierarchy-object.selected {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.hierarchy-object.dragging {
+  opacity: 0.3;
+}
+
+.hierarchy-object-icon {
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+
+.hierarchy-object-type {
+  flex: 1;
+  text-transform: capitalize;
+}
+
+.hierarchy-object-id {
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.hierarchy-drop-indicator {
+  height: 2px;
+  background: var(--accent);
+  margin: 0 10px 0 24px;
+}
