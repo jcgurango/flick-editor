@@ -85,6 +85,8 @@ function App() {
   const [dragPreview, setDragPreview] = useState<FlickObject | null>(null)
   // Scale preview: a ghost object shown during scaling (not yet committed)
   const [scalePreview, setScalePreview] = useState<FlickObject | null>(null)
+  // Rotation preview: a ghost object shown during rotation (not yet committed)
+  const [rotatePreview, setRotatePreview] = useState<FlickObject | null>(null)
   // Draw preview: shape being drawn with rect/ellipse tool
   const [drawPreview, setDrawPreview] = useState<FlickObject | null>(null)
   // Box select marquee (canvas-space coordinates)
@@ -375,7 +377,7 @@ function App() {
         const canvasX = (e.clientX - rect.left - s.pan.x) / s.zoom
         const canvasY = (e.clientY - rect.top - s.pan.y) / s.zoom
 
-        const { id, layerId, type, attrs } = rotateObjRef.current
+        const { id, type, attrs } = rotateObjRef.current
 
         // Live pivot switching when shift toggles
         if (e.shiftKey !== rotateLastShiftRef.current) {
@@ -423,7 +425,8 @@ function App() {
         const rotAttrs = computeRotationAttrs(
           type, attrs, bbox, rotatePivotRef.current, newRotation,
         )
-        s.updateObjectAttrs(layerId, s.currentFrame, id, rotAttrs)
+        // Don't commit — store as preview
+        setRotatePreview({ id, type, attrs: { ...attrs, ...rotAttrs } })
         return
       }
 
@@ -578,8 +581,23 @@ function App() {
     isScalingRef.current = false
     scaleObjRef.current = null
     setScalePreview(null)
+
+    // Commit rotation preview on mouseup
+    if (isRotatingRef.current && rotatePreview && rotateObjRef.current) {
+      const s = useStore.getState()
+      const { layerId } = rotateObjRef.current
+      const original = rotateObjRef.current.attrs
+      const changed: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(rotatePreview.attrs)) {
+        if (v !== original[k]) changed[k] = v
+      }
+      if (Object.keys(changed).length > 0) {
+        s.updateObjectAttrs(layerId, s.currentFrame, rotatePreview.id, changed)
+      }
+    }
     isRotatingRef.current = false
     rotateObjRef.current = null
+    setRotatePreview(null)
 
     // Commit drawn shape
     if (isDrawingRef.current && drawPreview) {
@@ -599,7 +617,7 @@ function App() {
     }
     isDrawingRef.current = false
     setDrawPreview(null)
-  }, [dragPreview, scalePreview, drawPreview, boxSelectRect])
+  }, [dragPreview, scalePreview, rotatePreview, drawPreview, boxSelectRect])
 
   // Timeline scrubbing
   const scrubToX = useCallback(
@@ -781,6 +799,13 @@ function App() {
                   </g>
                 )}
 
+                {/* Rotation preview ghost */}
+                {rotatePreview && (
+                  <g opacity={0.4}>
+                    <SvgObject obj={rotatePreview} />
+                  </g>
+                )}
+
                 {/* Draw preview ghost */}
                 {drawPreview && (
                   <g opacity={0.6}>
@@ -811,12 +836,14 @@ function App() {
                   const singleSelected = selectedObjectIds.length === 1
 
                   return selectedObjectIds.map((selId) => {
-                    // During drag/scale, show bbox around preview
+                    // During drag/scale/rotate, show bbox around preview
                     const selObj = (dragPreview && dragPreview.id === selId)
                       ? dragPreview
                       : (scalePreview && scalePreview.id === selId)
                         ? scalePreview
-                        : allObjects.find((o) => o.id === selId)
+                        : (rotatePreview && rotatePreview.id === selId)
+                          ? rotatePreview
+                          : allObjects.find((o) => o.id === selId)
                     if (!selObj) return null
                     return (
                       <BoundingBox
