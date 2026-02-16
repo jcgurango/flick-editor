@@ -59,6 +59,11 @@ export function computeRotationAttrs(
 ): Record<string, unknown> {
   const oldRotation = (attrs.rotation as number) ?? 0
 
+  // Take the shortest path: adjust newRotation so the delta is in [-180, 180]
+  let delta = newRotation - oldRotation
+  delta = ((delta % 360) + 540) % 360 - 180
+  newRotation = oldRotation + delta
+
   // Object's rotation origin = center of bbox
   const oX = bbox.x + bbox.width * 0.5
   const oY = bbox.y + bbox.height * 0.5
