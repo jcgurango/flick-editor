@@ -78,13 +78,33 @@ export function Inspector() {
   const currentFrame = useStore((s) => s.currentFrame)
   const updateObjectAttrs = useStore((s) => s.updateObjectAttrs)
   const inspectorFocus = useStore((s) => s.inspectorFocus)
+  const editContext = useStore((s) => s.editContext)
+  const updateObjectInEditContext = useStore((s) => s.updateObjectInEditContext)
 
-  // Find selected object on the active keyframe
+  // Find selected object — either in edit context or on the active keyframe
   const activeLayer = project.layers.find((l) => l.id === activeLayerId)
   const activeKf = activeLayer?.keyframes.find((k) => k.frame === currentFrame)
-  const selectedObj = selectedObjectIds.length === 1 && activeKf
-    ? activeKf.objects.find((o) => o.id === selectedObjectIds[0])
-    : null
+
+  const selectedObj = (() => {
+    if (selectedObjectIds.length !== 1) return null
+    if (editContext.length > 0) {
+      // Walk edit context to find the innermost group's children
+      const rootEntry = editContext[0]
+      const rootLayer = project.layers.find((l) => l.id === rootEntry.layerId)
+      if (!rootLayer) return null
+      const kf = rootLayer.keyframes.find((k) => k.frame === currentFrame)
+      if (!kf) return null
+      let currentObjs = kf.objects
+      for (const entry of editContext) {
+        const grp = currentObjs.find((o) => o.id === entry.objectId)
+        if (grp?.type === 'group') {
+          currentObjs = (grp.attrs.children as import('../types/project').FlickObject[]) ?? []
+        } else return null
+      }
+      return currentObjs.find((o) => o.id === selectedObjectIds[0]) ?? null
+    }
+    return activeKf?.objects.find((o) => o.id === selectedObjectIds[0]) ?? null
+  })()
 
   // Resolve keyframe data for single-cell timeline selection
   const singleSel = getSingleSelectedKeyframe(frameSelection)
@@ -108,7 +128,7 @@ export function Inspector() {
               {selectedObjectIds.length} objects selected
             </div>
           </div>
-          <TweenSection layerId={activeLayer.id} kf={activeKf} />
+          {editContext.length === 0 && <TweenSection layerId={activeLayer.id} kf={activeKf} />}
         </div>
       )
     }
@@ -117,6 +137,7 @@ export function Inspector() {
     if (selectedObj && activeLayer && activeKf) {
       const fields = OBJECT_FIELDS[selectedObj.type] ?? []
       const typeName = TYPE_NAMES[selectedObj.type] ?? selectedObj.type
+      const inEditCtx = editContext.length > 0
 
       return (
         <div className="inspector">
@@ -134,14 +155,18 @@ export function Inspector() {
                 key={field.key}
                 field={field}
                 value={selectedObj.attrs[field.key]}
-                onChange={(val) =>
-                  updateObjectAttrs(activeLayer.id, activeKf.frame, selectedObj.id, { [field.key]: val })
-                }
+                onChange={(val) => {
+                  if (inEditCtx) {
+                    updateObjectInEditContext(selectedObj.id, { [field.key]: val })
+                  } else {
+                    updateObjectAttrs(activeLayer.id, activeKf.frame, selectedObj.id, { [field.key]: val })
+                  }
+                }}
               />
             ))}
           </div>
 
-          <TweenSection layerId={activeLayer.id} kf={activeKf} />
+          {!inEditCtx && <TweenSection layerId={activeLayer.id} kf={activeKf} />}
         </div>
       )
     }

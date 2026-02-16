@@ -141,6 +141,7 @@ function interpolateObjects(
     const interpolatedAttrs: Record<string, unknown> = {}
     const allKeys = new Set([...Object.keys(fromObj.attrs), ...Object.keys(toObj.attrs)])
     for (const key of allKeys) {
+      if (key === 'children') continue // handled below for groups
       const aVal = fromObj.attrs[key]
       const bVal = toObj.attrs[key]
       if (aVal !== undefined && bVal !== undefined) {
@@ -148,6 +149,13 @@ function interpolateObjects(
       } else {
         interpolatedAttrs[key] = aVal ?? bVal
       }
+    }
+
+    // Recursively interpolate group children
+    if (fromObj.type === 'group' && toObj.type === 'group') {
+      const fromChildren = (fromObj.attrs.children as FlickObject[]) ?? []
+      const toChildren = (toObj.attrs.children as FlickObject[]) ?? []
+      interpolatedAttrs.children = interpolateObjects(fromChildren, toChildren, t)
     }
 
     result.push({

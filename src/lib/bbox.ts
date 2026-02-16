@@ -47,13 +47,48 @@ export function computeBBox(obj: FlickObject): BBox | null {
       }
     }
 
+    case 'group': {
+      const children = (obj.attrs.children as FlickObject[]) ?? []
+      if (children.length === 0) return null
+      const gx = (obj.attrs.x as number) ?? 0
+      const gy = (obj.attrs.y as number) ?? 0
+      const sx = (obj.attrs.scaleX as number) ?? 1
+      const sy = (obj.attrs.scaleY as number) ?? 1
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const child of children) {
+        const childBBox = computeBBox(child)
+        if (!childBBox) continue
+        // Expand through child's rotation to get its true AABB
+        const childRot = (child.attrs.rotation as number) ?? 0
+        const origin = absoluteOrigin(child, childBBox)
+        const corners = rotatedCorners(childBBox, childRot, origin)
+        for (const [cx, cy] of corners) {
+          if (cx < minX) minX = cx
+          if (cx > maxX) maxX = cx
+          if (cy < minY) minY = cy
+          if (cy > maxY) maxY = cy
+        }
+      }
+      if (!isFinite(minX)) return null
+      // Apply scale then translate
+      const scaledMinX = Math.min(minX * sx, maxX * sx)
+      const scaledMinY = Math.min(minY * sy, maxY * sy)
+      const scaledW = (maxX - minX) * Math.abs(sx)
+      const scaledH = (maxY - minY) * Math.abs(sy)
+      return { x: scaledMinX + gx, y: scaledMinY + gy, width: scaledW, height: scaledH }
+    }
+
     default:
       return null
   }
 }
 
-/** Compute the center of a bounding box (used as the rotation/transform origin). */
-export function absoluteOrigin(_obj: FlickObject, bbox: BBox): Point {
+/** Compute the rotation/transform origin for an object.
+ *  Groups rotate around their (x, y) origin; others around bbox center. */
+export function absoluteOrigin(obj: FlickObject, bbox: BBox): Point {
+  if (obj.type === 'group') {
+    return [(obj.attrs.x as number) ?? 0, (obj.attrs.y as number) ?? 0]
+  }
   return [bbox.x + bbox.width * 0.5, bbox.y + bbox.height * 0.5]
 }
 

@@ -5,10 +5,11 @@ interface SvgObjectProps {
   obj: FlickObject
   onClick?: (e: React.MouseEvent) => void
   onMouseDown?: (e: React.MouseEvent) => void
+  onDoubleClick?: (e: React.MouseEvent) => void
 }
 
 /** Renders a FlickObject as the corresponding SVG element. */
-export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
+export function SvgObject({ obj, onClick, onMouseDown, onDoubleClick }: SvgObjectProps) {
   const { type, id } = obj
 
   // Extract non-SVG attrs
@@ -32,21 +33,41 @@ export function SvgObject({ obj, onClick, onMouseDown }: SvgObjectProps) {
     }
   }
 
-  // For paths, x/y is position (rendered as translate), not a native SVG attr
+  // For paths and groups, x/y is position (rendered as translate)
   let svgAttrs: Record<string, unknown> = restAttrs
-  if (type === 'path') {
-    const { x, y, ...pathAttrs } = restAttrs as Record<string, unknown> & { x?: number; y?: number }
-    svgAttrs = pathAttrs
+  if (type === 'path' || type === 'group') {
+    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, ...otherAttrs } = restAttrs as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number }
+    svgAttrs = otherAttrs
     const px = (x as number) ?? 0
     const py = (y as number) ?? 0
     if (px || py) {
       transforms.push(`translate(${px}, ${py})`)
     }
+    // Group scale (applied innermost — scales children around origin)
+    if (type === 'group') {
+      const sx = (obj.attrs.scaleX as number) ?? 1
+      const sy = (obj.attrs.scaleY as number) ?? 1
+      if (sx !== 1 || sy !== 1) {
+        transforms.push(`scale(${sx}, ${sy})`)
+      }
+    }
   }
 
   const transform = transforms.length > 0 ? transforms.join(' ') : undefined
 
-  const interactive = { onClick, onMouseDown, style: { cursor: 'pointer' as const }, pointerEvents: 'all' as const }
+  const interactive = { onClick, onMouseDown, onDoubleClick, style: { cursor: 'pointer' as const }, pointerEvents: 'all' as const }
+
+  // Group rendering — single <g> with transform + interactive props
+  if (type === 'group') {
+    const children = (obj.attrs.children as FlickObject[]) ?? []
+    return (
+      <g data-id={id} transform={transform} {...interactive}>
+        {children.map(child => (
+          <SvgObject key={child.id} obj={child} />
+        ))}
+      </g>
+    )
+  }
 
   const element = (() => {
     switch (type) {

@@ -227,6 +227,31 @@ export function MenuBar() {
       ],
     },
     {
+      id: 'object',
+      label: 'Object',
+      items: [
+        {
+          label: 'Group',
+          shortcut: 'Ctrl+G',
+          action: () => useStore.getState().groupSelectedObjects(),
+          disabled: selectedObjectIds.length < 2,
+        },
+        {
+          label: 'Break Apart',
+          shortcut: 'Ctrl+Shift+G',
+          action: () => useStore.getState().ungroupSelectedObject(),
+          disabled: (() => {
+            if (selectedObjectIds.length !== 1) return true
+            const s = useStore.getState()
+            const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+            const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
+            const obj = kf?.objects.find((o) => o.id === selectedObjectIds[0])
+            return !obj || obj.type !== 'group'
+          })(),
+        },
+      ],
+    },
+    {
       id: 'view',
       label: 'View',
       items: [

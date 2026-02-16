@@ -40,14 +40,29 @@ function flickObjectToSvg(obj: FlickObject): string {
   }
 
   let svgAttrs: Record<string, unknown> = rest
-  if (type === 'path') {
-    const { x, y, ...pathAttrs } = rest as Record<string, unknown> & { x?: number; y?: number }
-    svgAttrs = pathAttrs
+  if (type === 'path' || type === 'group') {
+    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, ...otherAttrs } = rest as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number }
+    svgAttrs = otherAttrs
     const px = (x as number) ?? 0
     const py = (y as number) ?? 0
     if (px || py) {
       transforms.push(`translate(${px}, ${py})`)
     }
+    if (type === 'group') {
+      const sx = (attrs.scaleX as number) ?? 1
+      const sy = (attrs.scaleY as number) ?? 1
+      if (sx !== 1 || sy !== 1) {
+        transforms.push(`scale(${sx}, ${sy})`)
+      }
+    }
+  }
+
+  // Group rendering
+  if (type === 'group') {
+    const children = (attrs.children as FlickObject[]) ?? []
+    const transformAttr = transforms.length > 0 ? ` transform="${transforms.join(' ')}"` : ''
+    const childSvg = children.map(c => flickObjectToSvg(c)).join('\n    ')
+    return `<g${transformAttr}>\n    ${childSvg}\n  </g>`
   }
 
   // Skip non-SVG attrs

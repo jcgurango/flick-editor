@@ -62,6 +62,12 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
 
     ...STYLE_FIELDS,
   ],
+  group: [
+    ...POSITION_FIELDS,
+    ROTATION_FIELD,
+    { key: 'scaleX', label: 'Scale X', type: 'number', step: 0.1 },
+    { key: 'scaleY', label: 'Scale Y', type: 'number', step: 0.1 },
+  ],
 }
 
 export const TYPE_NAMES: Record<string, string> = {
@@ -71,4 +77,5 @@ export const TYPE_NAMES: Record<string, string> = {
   line: 'Line',
   path: 'Path',
   text: 'Text',
+  group: 'Group',
 }

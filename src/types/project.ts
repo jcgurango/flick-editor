@@ -77,6 +77,16 @@ export function getSingleSelectedKeyframe(sel: FrameSelection | null): { layerId
   return { layerId: sel.layerIds[0], frame: sel.startFrame }
 }
 
+// ── Group Helpers ──
+
+export function isGroup(obj: FlickObject): boolean {
+  return obj.type === 'group'
+}
+
+export function getGroupChildren(obj: FlickObject): FlickObject[] {
+  return (obj.attrs.children as FlickObject[] | undefined) ?? []
+}
+
 // ── Helpers ──
 
 let _nextId = 1

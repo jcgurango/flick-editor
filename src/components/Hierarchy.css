@@ -1,18 +1,5 @@
 .hierarchy {
-  border-top: 1px solid var(--border);
   background: var(--bg-panel);
-  overflow-y: auto;
-  flex-shrink: 0;
-  max-height: 50%;
-}
-
-.hierarchy-header {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
-  padding: 8px 12px 6px;
 }
 
 .hierarchy-layer-group {
@@ -113,4 +100,22 @@
 
 .hierarchy-drop-indicator.layer {
   margin: 0 10px;
+}
+
+.hierarchy-group-chevron {
+  font-size: 9px;
+  flex-shrink: 0;
+  cursor: pointer;
+  width: 10px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.hierarchy-group-chevron:hover {
+  color: var(--text-primary);
+}
+
+.hierarchy-group-children {
+  border-left: 1px solid var(--border);
+  margin-left: 28px;
 }

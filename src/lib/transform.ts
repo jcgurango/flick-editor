@@ -1,5 +1,6 @@
 import type { BBox } from './bbox'
-import { pathIntrinsicBBox } from './bbox'
+import { pathIntrinsicBBox, computeBBox } from './bbox'
+import type { FlickObject } from '../types/project'
 
 type HandleId =
   | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br'
@@ -32,6 +33,8 @@ export function dragAttrs(
         y2: (attrs.y2 as number ?? 0) + dy,
       }
     case 'path':
+    case 'group':
+    case 'clip':
       return {
         x: (attrs.x as number ?? 0) + dx,
         y: (attrs.y as number ?? 0) + dy,
@@ -64,9 +67,15 @@ export function computeRotationAttrs(
   delta = ((delta % 360) + 540) % 360 - 180
   newRotation = oldRotation + delta
 
-  // Object's rotation origin = center of bbox
-  const oX = bbox.x + bbox.width * 0.5
-  const oY = bbox.y + bbox.height * 0.5
+  // Object's rotation origin: groups use (x, y), others use bbox center
+  let oX: number, oY: number
+  if (type === 'group') {
+    oX = (attrs.x as number) ?? 0
+    oY = (attrs.y as number) ?? 0
+  } else {
+    oX = bbox.x + bbox.width * 0.5
+    oY = bbox.y + bbox.height * 0.5
+  }
 
   // Pivot's world-space offset from origin
   const pDx = pivotWorld[0] - oX
@@ -214,7 +223,7 @@ export function computeScale(
 }
 
 /** Convert a desired bounding box into the correct attrs for a given object type. */
-function applyNewBBox(
+export function applyNewBBox(
   type: string,
   attrs: Record<string, unknown>,
   newBBox: BBox,
@@ -262,9 +271,39 @@ function applyNewBBox(
       return { d: newD, x: newBBox.x + newBBox.width / 2, y: newBBox.y + newBBox.height / 2 }
     }
 
+    case 'group': {
+      const children = (attrs.children as FlickObject[]) ?? []
+      if (children.length === 0) return { x: newBBox.x, y: newBBox.y, scaleX: 1, scaleY: 1 }
+      const childrenBBox = computeGroupChildrenBBox(children)
+      if (!childrenBBox || childrenBBox.width === 0 || childrenBBox.height === 0) {
+        return { x: newBBox.x, y: newBBox.y }
+      }
+      // Compute new scale factors from desired world bbox vs unscaled children bbox
+      const newScaleX = newBBox.width / childrenBBox.width
+      const newScaleY = newBBox.height / childrenBBox.height
+      // Derive new position: worldBBox.x = x + childrenBBox.x * scaleX
+      const newX = newBBox.x - childrenBBox.x * newScaleX
+      const newY = newBBox.y - childrenBBox.y * newScaleY
+      return { x: newX, y: newY, scaleX: newScaleX, scaleY: newScaleY }
+    }
+
     default:
       return {}
   }
+}
+
+function computeGroupChildrenBBox(children: FlickObject[]): BBox | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const child of children) {
+    const b = computeBBox(child)
+    if (!b) continue
+    if (b.x < minX) minX = b.x
+    if (b.y < minY) minY = b.y
+    if (b.x + b.width > maxX) maxX = b.x + b.width
+    if (b.y + b.height > maxY) maxY = b.y + b.height
+  }
+  if (!isFinite(minX)) return null
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
 // ── Path coordinate rewriting ──

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { getActiveKeyframe } from '../types/project'
+import type { FlickObject } from '../types/project'
 import './Hierarchy.css'
 
 const TYPE_ICONS: Record<string, string> = {
@@ -8,6 +9,9 @@ const TYPE_ICONS: Record<string, string> = {
   ellipse: '◯',
   path: '✎',
   line: '╱',
+  group: '▣',
+  circle: '◯',
+  text: 'T',
 }
 
 type DragState =
@@ -27,9 +31,12 @@ export function Hierarchy() {
   const moveObjectToLayer = useStore((s) => s.moveObjectToLayer)
   const reorderLayer = useStore((s) => s.reorderLayer)
 
+  const enterGroup = useStore((s) => s.enterGroup)
+
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [dropTarget, setDropTarget] = useState<{ layerId: string; index: number } | null>(null)
   const [layerDropIndex, setLayerDropIndex] = useState<number | null>(null)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   const handleObjDragStart = (objectId: string, layerId: string, e: React.DragEvent) => {
     setDragState({ kind: 'object', objectId, fromLayerId: layerId })
@@ -68,9 +75,94 @@ export function Hierarchy() {
     handleDragEnd()
   }
 
+  const toggleExpanded = (id: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const renderObject = (obj: FlickObject, i: number, layerId: string, total: number, depth = 0) => {
+    const isSelected = selectedObjectIds.includes(obj.id)
+    const isDragging = dragState?.kind === 'object' && dragState.objectId === obj.id
+    const showDropBefore = depth === 0 && dropTarget?.layerId === layerId && dropTarget.index === i
+    const showDropAfter = depth === 0 && dropTarget?.layerId === layerId && dropTarget.index === i + 1 && i === total - 1
+    const isGroup = obj.type === 'group'
+    const isExpanded = expandedGroups.has(obj.id)
+    const children = isGroup ? ((obj.attrs.children as FlickObject[]) ?? []) : []
+
+    return (
+      <div key={obj.id}>
+        {showDropBefore && <div className="hierarchy-drop-indicator" />}
+        <div
+          className={[
+            'hierarchy-object',
+            isSelected && 'selected',
+            isDragging && 'dragging',
+          ].filter(Boolean).join(' ')}
+          style={depth > 0 ? { paddingLeft: 8 + depth * 12 } : undefined}
+          draggable={depth === 0}
+          onDragStart={depth === 0 ? (e) => { e.stopPropagation(); handleObjDragStart(obj.id, layerId, e) } : undefined}
+          onDragEnd={depth === 0 ? handleDragEnd : undefined}
+          onDragOver={depth === 0 ? (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            e.dataTransfer.dropEffect = 'move'
+            if (dragState?.kind === 'object') {
+              const rect = e.currentTarget.getBoundingClientRect()
+              const midY = rect.top + rect.height / 2
+              setDropTarget({ layerId, index: e.clientY < midY ? i : i + 1 })
+            }
+          } : undefined}
+          onDrop={depth === 0 ? (e) => {
+            e.stopPropagation()
+            const rect = e.currentTarget.getBoundingClientRect()
+            const midY = rect.top + rect.height / 2
+            handleObjDrop(layerId, e.clientY < midY ? i : i + 1, e)
+          } : undefined}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (e.ctrlKey || e.metaKey) {
+              useStore.getState().toggleSelectedObjectId(obj.id)
+            } else {
+              setSelectedObjectIds([obj.id])
+            }
+            setActiveLayerId(layerId)
+            setInspectorFocus('canvas')
+          }}
+          onDoubleClick={isGroup ? (e) => {
+            e.stopPropagation()
+            enterGroup(obj.id, layerId)
+          } : undefined}
+        >
+          {isGroup && (
+            <span
+              className="hierarchy-group-chevron"
+              onClick={(e) => { e.stopPropagation(); toggleExpanded(obj.id) }}
+            >
+              {isExpanded ? '▾' : '▸'}
+            </span>
+          )}
+          <span className="hierarchy-object-icon">
+            {TYPE_ICONS[obj.type] ?? '?'}
+          </span>
+          <span className="hierarchy-object-type">{obj.type}</span>
+          <span className="hierarchy-object-id">{obj.id.slice(-6)}</span>
+        </div>
+        {isGroup && isExpanded && (
+          <div className="hierarchy-group-children">
+            {children.map((child, ci) => renderObject(child, ci, layerId, children.length, depth + 1))}
+          </div>
+        )}
+        {showDropAfter && <div className="hierarchy-drop-indicator" />}
+      </div>
+    )
+  }
+
   return (
     <div className="hierarchy">
-      <div className="hierarchy-header">Hierarchy</div>
       {project.layers.map((layer, layerIdx) => {
         const activeKf = getActiveKeyframe(layer, currentFrame)
         const objects = activeKf?.objects ?? []
@@ -132,61 +224,7 @@ export function Hierarchy() {
                 <span className="hierarchy-object-count">{objects.length}</span>
               </div>
               <div className="hierarchy-objects">
-                {objects.map((obj, i) => {
-                  const isSelected = selectedObjectIds.includes(obj.id)
-                  const isDragging = dragState?.kind === 'object' && dragState.objectId === obj.id
-                  const showDropBefore = dropTarget?.layerId === layer.id && dropTarget.index === i
-                  const showDropAfter = dropTarget?.layerId === layer.id && dropTarget.index === i + 1 && i === objects.length - 1
-
-                  return (
-                    <div key={obj.id}>
-                      {showDropBefore && <div className="hierarchy-drop-indicator" />}
-                      <div
-                        className={[
-                          'hierarchy-object',
-                          isSelected && 'selected',
-                          isDragging && 'dragging',
-                        ].filter(Boolean).join(' ')}
-                        draggable
-                        onDragStart={(e) => { e.stopPropagation(); handleObjDragStart(obj.id, layer.id, e) }}
-                        onDragEnd={handleDragEnd}
-                        onDragOver={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          e.dataTransfer.dropEffect = 'move'
-                          if (dragState?.kind === 'object') {
-                            const rect = e.currentTarget.getBoundingClientRect()
-                            const midY = rect.top + rect.height / 2
-                            setDropTarget({ layerId: layer.id, index: e.clientY < midY ? i : i + 1 })
-                          }
-                        }}
-                        onDrop={(e) => {
-                          e.stopPropagation()
-                          const rect = e.currentTarget.getBoundingClientRect()
-                          const midY = rect.top + rect.height / 2
-                          handleObjDrop(layer.id, e.clientY < midY ? i : i + 1, e)
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (e.ctrlKey || e.metaKey) {
-                            useStore.getState().toggleSelectedObjectId(obj.id)
-                          } else {
-                            setSelectedObjectIds([obj.id])
-                          }
-                          setActiveLayerId(layer.id)
-                          setInspectorFocus('canvas')
-                        }}
-                      >
-                        <span className="hierarchy-object-icon">
-                          {TYPE_ICONS[obj.type] ?? '?'}
-                        </span>
-                        <span className="hierarchy-object-type">{obj.type}</span>
-                        <span className="hierarchy-object-id">{obj.id.slice(-6)}</span>
-                      </div>
-                      {showDropAfter && <div className="hierarchy-drop-indicator" />}
-                    </div>
-                  )
-                })}
+                {objects.map((obj, i) => renderObject(obj, i, layer.id, objects.length))}
                 {objects.length === 0 && dropTarget?.layerId === layer.id && (
                   <div className="hierarchy-drop-indicator" />
                 )}

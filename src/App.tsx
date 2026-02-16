@@ -13,6 +13,8 @@ import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
 import { Hierarchy } from './components/Hierarchy'
 import { MenuBar } from './components/MenuBar'
+import { CollapsiblePanel } from './components/CollapsiblePanel'
+import { Breadcrumb } from './components/Breadcrumb'
 import { openProject, saveProject, saveProjectAs, clearFileHandle } from './lib/file-io'
 import './App.css'
 
@@ -88,6 +90,7 @@ function App() {
   const setAllLayersLocked = useStore((s) => s.setAllLayersLocked)
   const reorderLayer = useStore((s) => s.reorderLayer)
   const documentName = useStore((s) => s.documentName)
+  const editContext = useStore((s) => s.editContext)
 
   // Document title
   useEffect(() => {
@@ -157,6 +160,16 @@ function App() {
         return
       }
 
+      // Escape: exit edit context
+      if (e.key === 'Escape') {
+        const s = useStore.getState()
+        if (s.editContext.length > 0) {
+          e.preventDefault()
+          s.exitEditContext()
+          return
+        }
+      }
+
       // Undo/Redo
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
@@ -216,7 +229,9 @@ function App() {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         const s = useStore.getState()
-        if (s.inspectorFocus === 'canvas' && s.selectedObjectIds.length > 0) {
+        if (s.editContext.length > 0 && s.selectedObjectIds.length > 0) {
+          s.deleteObjectsInEditContext(s.selectedObjectIds)
+        } else if (s.inspectorFocus === 'canvas' && s.selectedObjectIds.length > 0) {
           s.deleteSelectedObjects()
         } else if (s.inspectorFocus === 'timeline' && s.frameSelection) {
           s.deleteFrameSelection()
@@ -275,6 +290,18 @@ function App() {
         return
       }
 
+      // Group / Ungroup
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g' && !e.shiftKey) {
+        e.preventDefault()
+        useStore.getState().groupSelectedObjects()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'G' || (e.key === 'g' && e.shiftKey))) {
+        e.preventDefault()
+        useStore.getState().ungroupSelectedObject()
+        return
+      }
+
       // Arrow key nudge
       const s = useStore.getState()
       if (s.selectedObjectIds.length > 0 && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
@@ -282,16 +309,44 @@ function App() {
         const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
         const dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
 
-        for (const objId of s.selectedObjectIds) {
-          // Find which layer contains this object on the current keyframe
-          for (const layer of s.project.layers) {
-            if (layer.locked) continue
-            const kf = layer.keyframes.find((k) => k.frame === s.currentFrame)
-            const obj = kf?.objects.find((o) => o.id === objId)
-            if (kf && obj) {
+        if (s.editContext.length > 0) {
+          // Nudge within edit context — need to resolve the group's children
+          // For simplicity, use updateObjectInEditContext for each selected child
+          for (const objId of s.selectedObjectIds) {
+            // We need to find the child object to compute dragAttrs
+            // Walk the edit context to find the innermost group's children
+            const ctx = s.editContext
+            let currentObjs: FlickObject[] = []
+            const rootLayer = s.project.layers.find((l) => l.id === ctx[0].layerId)
+            if (rootLayer) {
+              const kf = rootLayer.keyframes.find((k) => k.frame === s.currentFrame)
+              if (kf) {
+                currentObjs = kf.objects
+                for (const entry of ctx) {
+                  const grp = currentObjs.find((o) => o.id === entry.objectId)
+                  if (grp?.type === 'group') {
+                    currentObjs = (grp.attrs.children as FlickObject[]) ?? []
+                  }
+                }
+              }
+            }
+            const obj = currentObjs.find((o) => o.id === objId)
+            if (obj) {
               const newAttrs = dragAttrs(obj.type, obj.attrs, dx, dy)
-              s.updateObjectAttrs(layer.id, kf.frame, obj.id, newAttrs)
-              break
+              s.updateObjectInEditContext(obj.id, newAttrs)
+            }
+          }
+        } else {
+          for (const objId of s.selectedObjectIds) {
+            for (const layer of s.project.layers) {
+              if (layer.locked) continue
+              const kf = layer.keyframes.find((k) => k.frame === s.currentFrame)
+              const obj = kf?.objects.find((o) => o.id === objId)
+              if (kf && obj) {
+                const newAttrs = dragAttrs(obj.type, obj.attrs, dx, dy)
+                s.updateObjectAttrs(layer.id, kf.frame, obj.id, newAttrs)
+                break
+              }
             }
           }
         }
@@ -300,6 +355,71 @@ function App() {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [togglePlayback])
+
+  // Resolve group being edited (if in edit context)
+  // Groups rotate around (x, y) so transform = translate(x,y) rotate(rot) scale(sx,sy)
+  // This composes cleanly: just concatenate per-group transforms and track an affine matrix.
+  const editTarget = (() => {
+    if (editContext.length === 0) return null
+    const rootEntry = editContext[0]
+    const layer = project.layers.find((l) => l.id === rootEntry.layerId)
+    if (!layer) return null
+    const kf = layer.keyframes.find((k) => k.frame === currentFrame)
+    if (!kf) return null
+
+    let currentObjs: FlickObject[] = kf.objects
+    const transformParts: string[] = []
+
+    // Affine matrix [a, b, c, d, tx, ty] for local→canvas mapping
+    let ma = 1, mb = 0, mc = 0, md = 1, mtx = 0, mty = 0
+    const compose = (a2: number, b2: number, c2: number, d2: number, tx2: number, ty2: number) => {
+      const na = ma * a2 + mc * b2, nb = mb * a2 + md * b2
+      const nc = ma * c2 + mc * d2, nd = mb * c2 + md * d2
+      const ntx = ma * tx2 + mc * ty2 + mtx, nty = mb * tx2 + md * ty2 + mty
+      ma = na; mb = nb; mc = nc; md = nd; mtx = ntx; mty = nty
+    }
+
+    for (const entry of editContext) {
+      const group = currentObjs.find((o) => o.id === entry.objectId)
+      if (!group || group.type !== 'group') return null
+      const lx = (group.attrs.x as number) ?? 0
+      const ly = (group.attrs.y as number) ?? 0
+      const lr = (group.attrs.rotation as number) ?? 0
+      const lsx = (group.attrs.scaleX as number) ?? 1
+      const lsy = (group.attrs.scaleY as number) ?? 1
+
+      // translate(x, y) rotate(rot) scale(sx, sy)
+      if (lx || ly) {
+        transformParts.push(`translate(${lx}, ${ly})`)
+        compose(1, 0, 0, 1, lx, ly)
+      }
+      if (lr !== 0) {
+        transformParts.push(`rotate(${lr})`)
+        const rad = (lr * Math.PI) / 180
+        compose(Math.cos(rad), Math.sin(rad), -Math.sin(rad), Math.cos(rad), 0, 0)
+      }
+      if (lsx !== 1 || lsy !== 1) {
+        transformParts.push(`scale(${lsx}, ${lsy})`)
+        compose(lsx, 0, 0, lsy, 0, 0)
+      }
+
+      currentObjs = (group.attrs.children as FlickObject[]) ?? []
+    }
+
+    return {
+      children: currentObjs,
+      transformStr: transformParts.join(' '),
+      // World position of local origin (0,0)
+      groupX: mtx, groupY: mty,
+      // Affine matrix for local→canvas mapping (also used for inverse delta conversion)
+      mat: [ma, mb, mc, md, mtx, mty] as [number, number, number, number, number, number],
+      layerId: rootEntry.layerId,
+    }
+  })()
+
+  // Keep a ref to editTarget for use in event handlers (avoids stale closures)
+  const editTargetRef = useRef(editTarget)
+  editTargetRef.current = editTarget
 
   // Canvas refs
   const canvasAreaRef = useRef<HTMLDivElement>(null)
@@ -439,9 +559,20 @@ function App() {
 
       if (isDraggingRef.current && dragObjRef.current) {
         const s = useStore.getState()
-        // Total delta from drag start (not incremental)
-        const dx = (e.clientX - dragStartRef.current.x) / s.zoom
-        const dy = (e.clientY - dragStartRef.current.y) / s.zoom
+        // Total delta from drag start (not incremental) in canvas space
+        let dx = (e.clientX - dragStartRef.current.x) / s.zoom
+        let dy = (e.clientY - dragStartRef.current.y) / s.zoom
+        // Convert canvas delta to group-local delta using inverse affine matrix
+        const et = editTargetRef.current
+        if (et) {
+          const [a, b, c, d] = et.mat
+          const det = a * d - b * c
+          if (Math.abs(det) > 1e-10) {
+            const ldx = (d * dx - c * dy) / det
+            const ldy = (-b * dx + a * dy) / det
+            dx = ldx; dy = ldy
+          }
+        }
         const { id, type, attrs } = dragObjRef.current
         const newAttrs = dragAttrs(type, attrs, dx, dy)
         // Don't commit — store as preview
@@ -451,9 +582,20 @@ function App() {
 
       if (isScalingRef.current && scaleObjRef.current) {
         const s = useStore.getState()
-        // Total delta from drag start (not incremental)
-        const dx = (e.clientX - scaleStartRef.current.x) / s.zoom
-        const dy = (e.clientY - scaleStartRef.current.y) / s.zoom
+        // Total delta from drag start (not incremental) in canvas space
+        let dx = (e.clientX - scaleStartRef.current.x) / s.zoom
+        let dy = (e.clientY - scaleStartRef.current.y) / s.zoom
+        // Convert canvas delta to group-local delta using inverse affine matrix
+        const et = editTargetRef.current
+        if (et) {
+          const [a, b, c, d] = et.mat
+          const det = a * d - b * c
+          if (Math.abs(det) > 1e-10) {
+            const ldx = (d * dx - c * dy) / det
+            const ldy = (-b * dx + a * dy) / det
+            dx = ldx; dy = ldy
+          }
+        }
         const { id, type, attrs } = scaleObjRef.current
         const bbox = computeBBox({ id, type, attrs })
         if (!bbox) return
@@ -470,15 +612,27 @@ function App() {
       if (isRotatingRef.current && rotateObjRef.current) {
         const s = useStore.getState()
         const rect = e.currentTarget.getBoundingClientRect()
-        const canvasX = (e.clientX - rect.left - s.pan.x) / s.zoom
-        const canvasY = (e.clientY - rect.top - s.pan.y) / s.zoom
+        let mouseX = (e.clientX - rect.left - s.pan.x) / s.zoom
+        let mouseY = (e.clientY - rect.top - s.pan.y) / s.zoom
+
+        // When in edit context, convert mouse to local space (pivot is in local space)
+        const et = editTargetRef.current
+        if (et) {
+          const [a, b, c, d, tx, ty] = et.mat
+          const det = a * d - b * c
+          if (Math.abs(det) > 1e-10) {
+            const lx = mouseX - tx, ly = mouseY - ty
+            mouseX = (d * lx - c * ly) / det
+            mouseY = (-b * lx + a * ly) / det
+          }
+        }
 
         const { id, type, attrs } = rotateObjRef.current
 
         // Live pivot switching when shift toggles
         if (e.shiftKey !== rotateLastShiftRef.current) {
           const [opx, opy] = rotatePivotRef.current
-          const oldAngle = Math.atan2(canvasY - opy, canvasX - opx)
+          const oldAngle = Math.atan2(mouseY - opy, mouseX - opx)
           const oldDelta = oldAngle - rotateRefAngleRef.current
 
           const bbox = computeBBox({ id, type, attrs })
@@ -496,7 +650,7 @@ function App() {
                 (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
               ]
             }
-            const newAngle = Math.atan2(canvasY - newPivot[1], canvasX - newPivot[0])
+            const newAngle = Math.atan2(mouseY - newPivot[1], mouseX - newPivot[0])
             rotateRefAngleRef.current = newAngle - oldDelta
             rotatePivotRef.current = newPivot
           }
@@ -504,7 +658,7 @@ function App() {
         }
 
         const [px, py] = rotatePivotRef.current
-        const currentAngle = Math.atan2(canvasY - py, canvasX - px)
+        const currentAngle = Math.atan2(mouseY - py, mouseX - px)
         const rawDeltaDeg = ((currentAngle - rotateRefAngleRef.current) * 180) / Math.PI
         let newRotation = rotateOrigRotRef.current + rawDeltaDeg
 
@@ -603,7 +757,11 @@ function App() {
         if (v !== original[k]) changed[k] = v
       }
       if (Object.keys(changed).length > 0) {
-        s.updateObjectAttrs(layerId, s.currentFrame, dragPreview.id, changed)
+        if (s.editContext.length > 0) {
+          s.updateObjectInEditContext(dragPreview.id, changed)
+        } else {
+          s.updateObjectAttrs(layerId, s.currentFrame, dragPreview.id, changed)
+        }
       }
     }
     isDraggingRef.current = false
@@ -664,14 +822,17 @@ function App() {
     if (isScalingRef.current && scalePreview && scaleObjRef.current) {
       const s = useStore.getState()
       const { layerId } = scaleObjRef.current
-      // Merge only the changed attrs (preview has full attrs, diff against original)
       const original = scaleObjRef.current.attrs
       const changed: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(scalePreview.attrs)) {
         if (v !== original[k]) changed[k] = v
       }
       if (Object.keys(changed).length > 0) {
-        s.updateObjectAttrs(layerId, s.currentFrame, scalePreview.id, changed)
+        if (s.editContext.length > 0) {
+          s.updateObjectInEditContext(scalePreview.id, changed)
+        } else {
+          s.updateObjectAttrs(layerId, s.currentFrame, scalePreview.id, changed)
+        }
       }
     }
     isScalingRef.current = false
@@ -688,7 +849,11 @@ function App() {
         if (v !== original[k]) changed[k] = v
       }
       if (Object.keys(changed).length > 0) {
-        s.updateObjectAttrs(layerId, s.currentFrame, rotatePreview.id, changed)
+        if (s.editContext.length > 0) {
+          s.updateObjectInEditContext(rotatePreview.id, changed)
+        } else {
+          s.updateObjectAttrs(layerId, s.currentFrame, rotatePreview.id, changed)
+        }
       }
     }
     isRotatingRef.current = false
@@ -928,7 +1093,8 @@ function App() {
                 />
 
                 <g pointerEvents={activeTool === 'select' ? undefined : 'none'}>
-                  {project.layers
+                  {/* Normal mode: all layers interactive */}
+                  {!editTarget && project.layers
                     .filter((l) => l.visible)
                     .slice()
                     .reverse()
@@ -953,11 +1119,16 @@ function App() {
                                 setFrameSelection(null)
                                 useStore.getState().setInspectorFocus('canvas')
                               } : undefined}
+                              onDoubleClick={activeTool === 'select' ? (e) => {
+                                if (!isOnKeyframe || layer.locked) return
+                                if (obj.type !== 'group') return
+                                e.stopPropagation()
+                                useStore.getState().enterGroup(obj.id, layer.id)
+                              } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
                                 if (e.button !== 0) return
                                 if (!isOnKeyframe || layer.locked || e.shiftKey) return
                                 if (e.ctrlKey || e.metaKey) return // ctrl-click handled in onClick
-                                // Find the keyframe object (not interpolated) for editing
                                 const kf = layer.keyframes.find((k) => k.frame === currentFrame)
                                 const kfObj = kf?.objects.find((o) => o.id === obj.id)
                                 if (!kfObj) return
@@ -977,25 +1148,89 @@ function App() {
                         </g>
                       )
                     })}
+                  {/* Edit context mode: dim everything, interactive group children */}
+                  {editTarget && (
+                    <>
+                      {/* Dimmed background: all layers non-interactive */}
+                      <g opacity={0.3} pointerEvents="none">
+                        {project.layers
+                          .filter((l) => l.visible)
+                          .slice()
+                          .reverse()
+                          .map((layer) => {
+                            const objects = resolveFrame(layer, currentFrame, project.totalFrames)
+                            return (
+                              <g key={layer.id}>
+                                {objects.map((obj) => (
+                                  <SvgObject key={obj.id} obj={obj} />
+                                ))}
+                              </g>
+                            )
+                          })}
+                      </g>
+                      {/* Origin cross indicator */}
+                      <g transform={`translate(${editTarget.groupX}, ${editTarget.groupY})`} pointerEvents="none">
+                        <line x1={-12 / zoom} y1={0} x2={12 / zoom} y2={0} stroke="#ff4488" strokeWidth={1.5 / zoom} />
+                        <line x1={0} y1={-12 / zoom} x2={0} y2={12 / zoom} stroke="#ff4488" strokeWidth={1.5 / zoom} />
+                      </g>
+                      {/* Interactive group children */}
+                      <g transform={editTarget.transformStr}>
+                        {editTarget.children.map((obj) => (
+                          <SvgObject
+                            key={obj.id}
+                            obj={obj}
+                            onClick={activeTool === 'select' ? (e) => {
+                              e.stopPropagation()
+                              if (e.ctrlKey || e.metaKey) {
+                                toggleSelectedObjectId(obj.id)
+                              } else {
+                                setSelectedObjectIds([obj.id])
+                              }
+                              useStore.getState().setInspectorFocus('canvas')
+                            } : undefined}
+                            onDoubleClick={activeTool === 'select' ? (e) => {
+                              if (obj.type !== 'group') return
+                              e.stopPropagation()
+                              useStore.getState().enterGroup(obj.id, editTarget.layerId)
+                            } : undefined}
+                            onMouseDown={activeTool === 'select' ? (e) => {
+                              if (e.button !== 0 || e.shiftKey) return
+                              if (e.ctrlKey || e.metaKey) return
+                              const childObj = editTarget.children.find((o) => o.id === obj.id)
+                              if (!childObj) return
+                              e.stopPropagation()
+                              isDraggingRef.current = true
+                              dragStartRef.current = { x: e.clientX, y: e.clientY }
+                              dragObjRef.current = { id: obj.id, layerId: editTarget.layerId, type: childObj.type, attrs: { ...childObj.attrs } }
+                              const s = useStore.getState()
+                              if (!s.selectedObjectIds.includes(obj.id)) {
+                                setSelectedObjectIds([obj.id])
+                              }
+                            } : undefined}
+                          />
+                        ))}
+                      </g>
+                    </>
+                  )}
                 </g>
 
                 {/* Drag preview ghost */}
                 {dragPreview && (
-                  <g opacity={0.4}>
+                  <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={dragPreview} />
                   </g>
                 )}
 
                 {/* Scale preview ghost */}
                 {scalePreview && (
-                  <g opacity={0.4}>
+                  <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={scalePreview} />
                   </g>
                 )}
 
                 {/* Rotation preview ghost */}
                 {rotatePreview && (
-                  <g opacity={0.4}>
+                  <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={rotatePreview} />
                   </g>
                 )}
@@ -1024,14 +1259,18 @@ function App() {
 
                 {/* Bounding boxes for selected objects */}
                 {activeTool === 'select' && selectedObjectIds.length > 0 && (() => {
-                  const allObjects = project.layers
-                    .filter((l) => l.visible)
-                    .flatMap((l) => resolveFrame(l, currentFrame, project.totalFrames))
+                  // In edit context, find objects from the edit target; otherwise from all layers
+                  const allObjects = editTarget
+                    ? editTarget.children
+                    : project.layers
+                        .filter((l) => l.visible)
+                        .flatMap((l) => resolveFrame(l, currentFrame, project.totalFrames))
                   const singleSelected = selectedObjectIds.length === 1
+                  // Group offset for bounding boxes when in edit context
 
                   return selectedObjectIds.map((selId) => {
                     // During drag/scale/rotate, show bbox around preview
-                    const selObj = (dragPreview && dragPreview.id === selId)
+                    let selObj = (dragPreview && dragPreview.id === selId)
                       ? dragPreview
                       : (scalePreview && scalePreview.id === selId)
                         ? scalePreview
@@ -1039,62 +1278,86 @@ function App() {
                           ? rotatePreview
                           : allObjects.find((o) => o.id === selId)
                     if (!selObj) return null
+                    // When in edit context, offset the object's bbox to world coords
                     return (
-                      <BoundingBox
-                        key={selId}
-                        obj={selObj}
-                        zoom={zoom}
-                        onHandleMouseDown={singleSelected ? (handle, e) => {
-                          if (e.button !== 0) return
-                          e.stopPropagation()
-                          const layer = project.layers.find((l) => l.id === activeLayerId)
-                          const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
-                          const kfObj = kf?.objects.find((o) => o.id === selId)
-                          if (!layer || !kf || !kfObj) return
-                          isScalingRef.current = true
-                          scaleStartRef.current = { x: e.clientX, y: e.clientY }
-                          scaleHandleRef.current = handle
-                          scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
-                        } : undefined}
-                        onRotateMouseDown={singleSelected ? (corner: RotateCorner, e: React.MouseEvent) => {
-                          if (e.button !== 0) return
-                          e.stopPropagation()
-                          const layer = project.layers.find((l) => l.id === activeLayerId)
-                          const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
-                          const kfObj = kf?.objects.find((o) => o.id === selId)
-                          if (!layer || !kf || !kfObj) return
+                      <g key={selId} transform={editTarget ? editTarget.transformStr : undefined}>
+                        <BoundingBox
+                          obj={selObj}
+                          zoom={zoom}
+                          onHandleMouseDown={singleSelected ? (handle, e) => {
+                            if (e.button !== 0) return
+                            e.stopPropagation()
+                            // In edit context, use editTarget children; otherwise find from layer
+                            const kfObj = editTarget
+                              ? editTarget.children.find((o) => o.id === selId)
+                              : (() => {
+                                  const layer = project.layers.find((l) => l.id === activeLayerId)
+                                  const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                                  return kf?.objects.find((o) => o.id === selId)
+                                })()
+                            const layerId = editTarget ? editTarget.layerId : activeLayerId
+                            if (!kfObj) return
+                            isScalingRef.current = true
+                            scaleStartRef.current = { x: e.clientX, y: e.clientY }
+                            scaleHandleRef.current = handle
+                            scaleObjRef.current = { id: kfObj.id, layerId, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                          } : undefined}
+                          onRotateMouseDown={singleSelected ? (corner: RotateCorner, e: React.MouseEvent) => {
+                            if (e.button !== 0) return
+                            e.stopPropagation()
+                            const kfObj = editTarget
+                              ? editTarget.children.find((o) => o.id === selId)
+                              : (() => {
+                                  const layer = project.layers.find((l) => l.id === activeLayerId)
+                                  const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
+                                  return kf?.objects.find((o) => o.id === selId)
+                                })()
+                            const layerId = editTarget ? editTarget.layerId : activeLayerId
+                            if (!kfObj) return
 
-                          const bbox = computeBBox(kfObj)
-                          if (!bbox) return
-                          const rot = (kfObj.attrs.rotation as number) ?? 0
-                          const origin = absoluteOrigin(kfObj, bbox)
-                          const rCorners = rotatedCorners(bbox, rot, origin)
+                            const bbox = computeBBox(kfObj)
+                            if (!bbox) return
+                            const rot = (kfObj.attrs.rotation as number) ?? 0
+                            const origin = absoluteOrigin(kfObj, bbox)
+                            const rCorners = rotatedCorners(bbox, rot, origin)
 
-                          let pivot: [number, number]
-                          if (e.shiftKey) {
-                            const oppositeIdx: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
-                            pivot = rCorners[oppositeIdx[corner]]
-                          } else {
-                            pivot = [
-                              (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
-                              (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
-                            ]
-                          }
+                            let pivot: [number, number]
+                            if (e.shiftKey) {
+                              const oppositeIdx: Record<string, number> = { tl: 2, tr: 3, bl: 1, br: 0 }
+                              pivot = rCorners[oppositeIdx[corner]]
+                            } else {
+                              pivot = [
+                                (rCorners[0][0] + rCorners[1][0] + rCorners[2][0] + rCorners[3][0]) / 4,
+                                (rCorners[0][1] + rCorners[1][1] + rCorners[2][1] + rCorners[3][1]) / 4,
+                              ]
+                            }
 
-                          const svgRect = canvasAreaRef.current!.getBoundingClientRect()
-                          const s = useStore.getState()
-                          const startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
-                          const startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
+                            const svgRect = canvasAreaRef.current!.getBoundingClientRect()
+                            const s = useStore.getState()
+                            let startX = (e.clientX - svgRect.left - s.pan.x) / s.zoom
+                            let startY = (e.clientY - svgRect.top - s.pan.y) / s.zoom
 
-                          isRotatingRef.current = true
-                          rotateRefAngleRef.current = Math.atan2(startY - pivot[1], startX - pivot[0])
-                          rotatePivotRef.current = pivot
-                          rotateOrigRotRef.current = rot
-                          rotateLastShiftRef.current = e.shiftKey
-                          rotateCornerRef.current = corner
-                          rotateObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
-                        } : undefined}
-                      />
+                            // When in edit context, convert mouse to local space (pivot is already local)
+                            if (editTarget) {
+                              const [a, b, c, d, tx, ty] = editTarget.mat
+                              const det = a * d - b * c
+                              if (Math.abs(det) > 1e-10) {
+                                const lx = startX - tx, ly = startY - ty
+                                startX = (d * lx - c * ly) / det
+                                startY = (-b * lx + a * ly) / det
+                              }
+                            }
+
+                            isRotatingRef.current = true
+                            rotateRefAngleRef.current = Math.atan2(startY - pivot[1], startX - pivot[0])
+                            rotatePivotRef.current = pivot
+                            rotateOrigRotRef.current = rot
+                            rotateLastShiftRef.current = e.shiftKey
+                            rotateCornerRef.current = corner
+                            rotateObjRef.current = { id: kfObj.id, layerId, type: kfObj.type, attrs: { ...kfObj.attrs } }
+                          } : undefined}
+                        />
+                      </g>
                     )
                   })
                 })()}
@@ -1109,9 +1372,13 @@ function App() {
         {/* Inspector + Hierarchy */}
         <div style={{ width: inspectorWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-            <Inspector />
+            <CollapsiblePanel title="Inspector">
+              <Inspector />
+            </CollapsiblePanel>
+            <CollapsiblePanel title="Hierarchy">
+              <Hierarchy />
+            </CollapsiblePanel>
           </div>
-          <Hierarchy />
         </div>
       </div>
 
@@ -1123,6 +1390,7 @@ function App() {
         <div className="timeline-toolbar">
           <button className="timeline-btn" title="Add Layer" onClick={() => useStore.getState().addLayer()}>+</button>
           <button className="timeline-btn" title="Delete Layer" onClick={() => useStore.getState().deleteSelectedLayers()}>−</button>
+          <Breadcrumb />
           <div style={{ flex: 1 }} />
           <button className="timeline-btn" title="Previous Frame" onClick={() => setCurrentFrame(Math.max(1, currentFrame - 1))}>⏮</button>
           <button className="timeline-btn" title={isPlaying ? 'Pause' : 'Play'} onClick={togglePlayback}>

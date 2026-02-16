@@ -1,10 +1,18 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
 import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard, FrameClipboardLayer, FrameClipboardEntry } from './types/project'
-import { recenterPath } from './lib/transform'
+import { recenterPath, dragAttrs, applyNewBBox } from './lib/transform'
+import { computeBBox } from './lib/bbox'
 import { resolveFrame } from './lib/interpolate'
 
 const MAX_UNDO = 100
+
+export interface EditContextEntry {
+  type: 'group' | 'clip'
+  objectId: string      // FlickObject.id on the parent keyframe
+  layerId: string       // layer containing the object
+  clipId?: string       // for clips: ClipDefinition.id
+}
 
 interface EditorState {
   // Project
@@ -54,6 +62,12 @@ interface EditorState {
   inspectorFocus: 'canvas' | 'timeline' | 'layer'
   setInspectorFocus: (focus: 'canvas' | 'timeline' | 'layer') => void
 
+  // Edit context (group/clip editing)
+  editContext: EditContextEntry[]
+  enterGroup: (objectId: string, layerId: string) => void
+  exitEditContext: () => void
+  exitToStage: () => void
+
   // Viewport
   zoom: number
   setZoom: (zoom: number) => void
@@ -91,6 +105,10 @@ interface EditorState {
   deleteFrameSelection: () => void
   deleteLayer: (layerId: string) => void
   deleteSelectedLayers: () => void
+  groupSelectedObjects: () => void
+  ungroupSelectedObject: () => void
+  updateObjectInEditContext: (objectId: string, attrs: Record<string, unknown>) => void
+  deleteObjectsInEditContext: (objectIds: string[]) => void
 }
 
 function createDemoProject(): Project {
@@ -218,6 +236,7 @@ export const useStore = create<EditorState>((set) => ({
     clipboard: { type: 'objects', layerId: '', objects: [] },
     inspectorFocus: 'canvas' as const,
     isPlaying: false,
+    editContext: [],
   }),
   documentName: '',
   setDocumentName: (documentName) => set({ documentName }),
@@ -490,6 +509,27 @@ export const useStore = create<EditorState>((set) => ({
     })),
   inspectorFocus: 'canvas' as const,
   setInspectorFocus: (inspectorFocus) => set({ inspectorFocus }),
+
+  // Edit context
+  editContext: [],
+  enterGroup: (objectId, layerId) =>
+    set((state) => ({
+      editContext: [...state.editContext, { type: 'group' as const, objectId, layerId }],
+      selectedObjectIds: [],
+      inspectorFocus: 'canvas' as const,
+    })),
+  exitEditContext: () =>
+    set((state) => ({
+      editContext: state.editContext.slice(0, -1),
+      selectedObjectIds: [],
+      inspectorFocus: 'canvas' as const,
+    })),
+  exitToStage: () =>
+    set({
+      editContext: [],
+      selectedObjectIds: [],
+      inspectorFocus: 'canvas' as const,
+    }),
 
   zoom: 1,
   setZoom: (zoom) => set({ zoom }),
@@ -992,5 +1032,226 @@ export const useStore = create<EditorState>((set) => ({
         selectedObjectIds: [],
       }
     }),
+
+  groupSelectedObjects: () => {
+    const s: EditorState = useStore.getState()
+    if (s.selectedObjectIds.length < 2) return
+    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    if (!layer) return
+    const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) return
+
+    const selectedSet = new Set(s.selectedObjectIds)
+    const selectedObjs = kf.objects.filter((o: FlickObject) => selectedSet.has(o.id))
+    if (selectedObjs.length < 2) return
+
+    // Compute union bbox center → group origin
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const obj of selectedObjs) {
+      const bbox = computeBBox(obj)
+      if (!bbox) continue
+      if (bbox.x < minX) minX = bbox.x
+      if (bbox.y < minY) minY = bbox.y
+      if (bbox.x + bbox.width > maxX) maxX = bbox.x + bbox.width
+      if (bbox.y + bbox.height > maxY) maxY = bbox.y + bbox.height
+    }
+    if (!isFinite(minX)) return
+    const gx = (minX + maxX) / 2
+    const gy = (minY + maxY) / 2
+
+    // Offset each child's position by -origin (make relative to group)
+    const children: FlickObject[] = selectedObjs.map((obj: FlickObject) => {
+      const offsetAttrs = dragAttrs(obj.type, obj.attrs, -gx, -gy)
+      return { ...obj, attrs: { ...obj.attrs, ...offsetAttrs } }
+    })
+
+    const groupId = generateId()
+    const groupObj: FlickObject = {
+      id: groupId,
+      type: 'group',
+      attrs: { x: gx, y: gy, rotation: 0, scaleX: 1, scaleY: 1, children },
+    }
+
+    // Replace selected objects with the group on THIS keyframe only
+    // Insert group at the position of the first selected object
+    const firstSelectedIdx = kf.objects.findIndex((o: FlickObject) => selectedSet.has(o.id))
+    const remaining = kf.objects.filter((o: FlickObject) => !selectedSet.has(o.id))
+    const newObjects = [...remaining]
+    newObjects.splice(Math.min(firstSelectedIdx, newObjects.length), 0, groupObj)
+
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) =>
+        l.id !== layer.id ? l : {
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+          ),
+        },
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+      selectedObjectIds: [groupId],
+    })
+  },
+
+  updateObjectInEditContext: (objectId, attrs) => {
+    const s: EditorState = useStore.getState()
+    if (s.editContext.length === 0) return
+
+    // Walk the edit context to find the group chain
+    const ctx = s.editContext
+    const rootEntry = ctx[0]
+    const layer = s.project.layers.find((l: Layer) => l.id === rootEntry.layerId)
+    if (!layer) return
+    const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) return
+
+    // Helper: recursively update object deep in group chain
+    function updateInObjects(objects: FlickObject[], depth: number): FlickObject[] {
+      const targetId = ctx[depth].objectId
+      return objects.map((obj: FlickObject) => {
+        if (obj.id !== targetId) return obj
+        if (depth === ctx.length - 1) {
+          // We're at the innermost group — update the target child
+          const children = (obj.attrs.children as FlickObject[]) ?? []
+          const newChildren = children.map((child: FlickObject) =>
+            child.id !== objectId ? child : { ...child, attrs: { ...child.attrs, ...attrs } },
+          )
+          return { ...obj, attrs: { ...obj.attrs, children: newChildren } }
+        }
+        // Recurse deeper
+        const children = (obj.attrs.children as FlickObject[]) ?? []
+        return { ...obj, attrs: { ...obj.attrs, children: updateInObjects(children, depth + 1) } }
+      })
+    }
+
+    const newObjects = updateInObjects(kf.objects, 0)
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) =>
+        l.id !== layer.id ? l : {
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+          ),
+        },
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+    })
+  },
+
+  deleteObjectsInEditContext: (objectIds) => {
+    const s: EditorState = useStore.getState()
+    if (s.editContext.length === 0 || objectIds.length === 0) return
+
+    const ctx = s.editContext
+    const rootEntry = ctx[0]
+    const layer = s.project.layers.find((l: Layer) => l.id === rootEntry.layerId)
+    if (!layer) return
+    const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) return
+
+    const idsToDelete = new Set(objectIds)
+
+    function removeFromObjects(objects: FlickObject[], depth: number): FlickObject[] {
+      const targetId = ctx[depth].objectId
+      return objects.map((obj: FlickObject) => {
+        if (obj.id !== targetId) return obj
+        if (depth === ctx.length - 1) {
+          const children = (obj.attrs.children as FlickObject[]) ?? []
+          const newChildren = children.filter((child: FlickObject) => !idsToDelete.has(child.id))
+          return { ...obj, attrs: { ...obj.attrs, children: newChildren } }
+        }
+        const children = (obj.attrs.children as FlickObject[]) ?? []
+        return { ...obj, attrs: { ...obj.attrs, children: removeFromObjects(children, depth + 1) } }
+      })
+    }
+
+    const newObjects = removeFromObjects(kf.objects, 0)
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) =>
+        l.id !== layer.id ? l : {
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+          ),
+        },
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+      selectedObjectIds: [],
+    })
+  },
+
+  ungroupSelectedObject: () => {
+    const s: EditorState = useStore.getState()
+    if (s.selectedObjectIds.length !== 1) return
+    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    if (!layer) return
+    const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) return
+
+    const groupObj = kf.objects.find((o: FlickObject) => o.id === s.selectedObjectIds[0])
+    if (!groupObj || groupObj.type !== 'group') return
+
+    const gx = (groupObj.attrs.x as number) ?? 0
+    const gy = (groupObj.attrs.y as number) ?? 0
+    const gScaleX = (groupObj.attrs.scaleX as number) ?? 1
+    const gScaleY = (groupObj.attrs.scaleY as number) ?? 1
+    const children = (groupObj.attrs.children as FlickObject[]) ?? []
+
+    // Bake group transform (scale then translate) into each child
+    const extracted: FlickObject[] = children.map((child: FlickObject) => {
+      let newAttrs = { ...child.attrs }
+      // If scale is non-trivial, bake it into the child's geometry
+      if (gScaleX !== 1 || gScaleY !== 1) {
+        const childBBox = computeBBox(child)
+        if (childBBox) {
+          const scaledBBox = {
+            x: childBBox.x * gScaleX,
+            y: childBBox.y * gScaleY,
+            width: childBBox.width * Math.abs(gScaleX),
+            height: childBBox.height * Math.abs(gScaleY),
+          }
+          const baked = applyNewBBox(child.type, child.attrs, scaledBBox)
+          newAttrs = { ...newAttrs, ...baked }
+        }
+      }
+      // Then translate by group position
+      const offsetAttrs = dragAttrs(child.type, newAttrs, gx, gy)
+      return { ...child, attrs: { ...newAttrs, ...offsetAttrs } }
+    })
+
+    // Replace group with flattened children on THIS keyframe only
+    const groupIdx = kf.objects.findIndex((o: FlickObject) => o.id === groupObj.id)
+    const newObjects = [...kf.objects]
+    newObjects.splice(groupIdx, 1, ...extracted)
+
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) =>
+        l.id !== layer.id ? l : {
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+          ),
+        },
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+      selectedObjectIds: extracted.map((o: FlickObject) => o.id),
+    })
+  },
 
 }))
