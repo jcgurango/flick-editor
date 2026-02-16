@@ -660,6 +660,7 @@ function App() {
       e.stopPropagation()
       setSelectedKeyframe({ layerId, frame })
       setCurrentFrame(frame)
+      setActiveLayerId(layerId)
       useStore.getState().setInspectorFocus('timeline')
     },
     [setSelectedKeyframe, setCurrentFrame],
