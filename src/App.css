@@ -158,7 +158,32 @@
   border-right: 1px solid var(--border);
   overflow-y: hidden;
   background: var(--bg-panel-alt);
-  border-top: 20px solid var(--timeline-header); /* match frame-numbers row height */
+}
+
+.timeline-layers-header {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: var(--timeline-header);
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.timeline-layers-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.timeline-layers-header .timeline-layer-actions {
+  gap: 2px;
+}
+
+.timeline-layers-header .timeline-layer-actions button {
+  font-size: 9px;
 }
 
 .timeline-layer {
@@ -344,16 +369,6 @@
 
 .timeline-frame-cell.current.tweened {
   background: rgba(74, 122, 255, 0.3);
-}
-
-/* Playhead line — uses height instead of bottom: 0 so it extends through scrollable content */
-.timeline-playhead {
-  position: absolute;
-  width: 2px;
-  min-height: 100%;
-  background: var(--accent);
-  pointer-events: none;
-  z-index: 2;
 }
 
 /* ── Resize handles ── */

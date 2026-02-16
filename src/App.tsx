@@ -36,8 +36,6 @@ const TOOLS = [
   { id: 'zoom', icon: '⌕', label: 'Zoom' },
 ] as const
 
-const FRAME_COUNT = 60
-
 /**
  * Determine the display type of a frame cell in the timeline.
  */
@@ -79,6 +77,10 @@ function App() {
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
   const setSelectedObjectIds = useStore((s) => s.setSelectedObjectIds)
   const toggleSelectedObjectId = useStore((s) => s.toggleSelectedObjectId)
+  const toggleLayerVisibility = useStore((s) => s.toggleLayerVisibility)
+  const toggleLayerLocked = useStore((s) => s.toggleLayerLocked)
+  const setAllLayersVisible = useStore((s) => s.setAllLayersVisible)
+  const setAllLayersLocked = useStore((s) => s.setAllLayersLocked)
   // Drag preview: a ghost object shown during dragging (not yet committed)
   const [dragPreview, setDragPreview] = useState<FlickObject | null>(null)
   // Scale preview: a ghost object shown during scaling (not yet committed)
@@ -168,6 +170,7 @@ function App() {
         for (const objId of s.selectedObjectIds) {
           // Find which layer contains this object on the current keyframe
           for (const layer of s.project.layers) {
+            if (layer.locked) continue
             const kf = layer.keyframes.find((k) => k.frame === s.currentFrame)
             const obj = kf?.objects.find((o) => o.id === objId)
             if (kf && obj) {
@@ -500,7 +503,8 @@ function App() {
         const s = useStore.getState()
         const hits: string[] = []
         for (const layer of s.project.layers) {
-          if (!layer.visible) continue
+          if (!layer.visible || layer.locked) continue
+          if (!layer.keyframes.some((kf) => kf.frame === s.currentFrame)) continue
           const objects = resolveFrame(layer, s.currentFrame)
           for (const obj of objects) {
             const bbox = computeBBox(obj)
@@ -587,10 +591,10 @@ function App() {
       if (!wrapper) return
       const rect = wrapper.getBoundingClientRect()
       const x = clientX - rect.left + wrapper.scrollLeft
-      const frame = Math.max(1, Math.min(FRAME_COUNT, Math.floor(x / 16) + 1))
+      const frame = Math.max(1, Math.min(project.totalFrames, Math.floor(x / 16) + 1))
       setCurrentFrame(frame)
     },
-    [setCurrentFrame],
+    [setCurrentFrame, project.totalFrames],
   )
 
   const handleScrubDown = useCallback(
@@ -714,7 +718,7 @@ function App() {
                               key={obj.id}
                               obj={obj}
                               onClick={activeTool === 'select' ? (e) => {
-                                if (!isOnKeyframe) return
+                                if (!isOnKeyframe || layer.locked) return
                                 e.stopPropagation()
                                 if (e.ctrlKey || e.metaKey) {
                                   toggleSelectedObjectId(obj.id)
@@ -725,7 +729,7 @@ function App() {
                                 setSelectedKeyframe(null)
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
-                                if (!isOnKeyframe || e.shiftKey) return
+                                if (!isOnKeyframe || layer.locked || e.shiftKey) return
                                 if (e.ctrlKey || e.metaKey) return // ctrl-click handled in onClick
                                 // Find the keyframe object (not interpolated) for editing
                                 const kf = layer.keyframes.find((k) => k.frame === currentFrame)
@@ -893,6 +897,23 @@ function App() {
         <div className="timeline-body">
           {/* Layers list */}
           <div className="timeline-layers" ref={layersRef}>
+            <div className="timeline-layers-header">
+              <span className="timeline-layers-title">Layers</span>
+              <div className="timeline-layer-actions">
+                <button
+                  title={project.layers.every((l) => l.visible) ? 'Hide all' : 'Show all'}
+                  onClick={() => setAllLayersVisible(!project.layers.every((l) => l.visible))}
+                >
+                  {project.layers.every((l) => l.visible) ? '👁' : '👁‍🗨'}
+                </button>
+                <button
+                  title={project.layers.every((l) => l.locked) ? 'Unlock all' : 'Lock all'}
+                  onClick={() => setAllLayersLocked(!project.layers.every((l) => l.locked))}
+                >
+                  {project.layers.every((l) => l.locked) ? '🔒' : '🔓'}
+                </button>
+              </div>
+            </div>
             {project.layers.map((layer) => (
               <div
                 key={layer.id}
@@ -902,8 +923,19 @@ function App() {
                 <span className="timeline-layer-icon">■</span>
                 <span className="timeline-layer-name">{layer.name}</span>
                 <div className="timeline-layer-actions">
-                  <button title="Toggle visibility">👁</button>
-                  <button title="Lock layer">🔒</button>
+                  <button
+                    title="Toggle visibility"
+                    style={{ opacity: layer.visible ? 1 : 0.3 }}
+                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id) }}
+                  >
+                    👁
+                  </button>
+                  <button
+                    title="Toggle lock"
+                    onClick={(e) => { e.stopPropagation(); toggleLayerLocked(layer.id) }}
+                  >
+                    {layer.locked ? '🔒' : '🔓'}
+                  </button>
                 </div>
               </div>
             ))}
@@ -921,7 +953,7 @@ function App() {
             }}
           >
             <div className="timeline-frame-numbers">
-              {Array.from({ length: FRAME_COUNT }, (_, i) => (
+              {Array.from({ length: project.totalFrames }, (_, i) => (
                 <div
                   key={i}
                   className={`timeline-frame-number${(i + 1) % 5 === 0 ? ' fifth' : ''}`}
@@ -933,7 +965,7 @@ function App() {
             <div className="timeline-frames-rows">
               {project.layers.map((layer) => (
                 <div key={layer.id} className="timeline-frame-row">
-                  {Array.from({ length: FRAME_COUNT }, (_, i) => {
+                  {Array.from({ length: project.totalFrames }, (_, i) => {
                     const frameNum = i + 1
                     const frameType = getFrameType(layer, frameNum)
                     const isKf = frameType === 'keyframe'

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useStore } from '../store'
 import type { TweenType, EaseDirection } from '../types/project'
 import { OBJECT_FIELDS, TYPE_NAMES } from '../lib/inspector-schema'
@@ -162,28 +163,113 @@ export function Inspector() {
     )
   }
 
-  // Mode 3: Nothing selected — scene properties
+  // Mode 3: Nothing selected — scene + layer properties
   return (
     <div className="inspector">
-      <div className="inspector-section">
-        <div className="inspector-section-title">Scene</div>
-        <div className="inspector-row">
-          <span className="inspector-label">FPS</span>
-          <input className="inspector-input" type="text" defaultValue={String(project.frameRate)} />
-        </div>
-        <div className="inspector-row">
-          <span className="inspector-label">Width</span>
-          <input className="inspector-input" type="text" defaultValue={String(project.width)} />
-        </div>
-        <div className="inspector-row">
-          <span className="inspector-label">Height</span>
-          <input className="inspector-input" type="text" defaultValue={String(project.height)} />
-        </div>
-      </div>
+      <SceneSection />
+      {activeLayer && <LayerSection layer={activeLayer} />}
+    </div>
+  )
+}
 
-      <div className="inspector-section">
-        <div className="inspector-section-title">Properties</div>
-        <div className="inspector-empty">Select a keyframe or object</div>
+function NumericInput({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
+  const [editing, setEditing] = useState<string | null>(null)
+
+  const commit = () => {
+    if (editing === null) return
+    const n = Number(editing)
+    if (!isNaN(n) && n > 0) onCommit(n)
+    setEditing(null)
+  }
+
+  return (
+    <input
+      className="inspector-input"
+      type="text"
+      value={editing !== null ? editing : String(value)}
+      onChange={(e) => setEditing(e.target.value)}
+      onFocus={() => setEditing(String(value))}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
+    />
+  )
+}
+
+function SceneSection() {
+  const project = useStore((s) => s.project)
+  const setFrameRate = useStore((s) => s.setFrameRate)
+  const setProjectDimensions = useStore((s) => s.setProjectDimensions)
+  const setTotalFrames = useStore((s) => s.setTotalFrames)
+
+  return (
+    <div className="inspector-section">
+      <div className="inspector-section-title">Scene</div>
+      <div className="inspector-row">
+        <span className="inspector-label">FPS</span>
+        <NumericInput value={project.frameRate} onCommit={setFrameRate} />
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Width</span>
+        <NumericInput value={project.width} onCommit={(w) => setProjectDimensions(w, project.height)} />
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Height</span>
+        <NumericInput value={project.height} onCommit={(h) => setProjectDimensions(project.width, h)} />
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Frames</span>
+        <NumericInput value={project.totalFrames} onCommit={setTotalFrames} />
+      </div>
+    </div>
+  )
+}
+
+function LayerSection({ layer }: { layer: { id: string; name: string; visible: boolean; locked: boolean } }) {
+  const renameLayer = useStore((s) => s.renameLayer)
+  const toggleLayerVisibility = useStore((s) => s.toggleLayerVisibility)
+  const toggleLayerLocked = useStore((s) => s.toggleLayerLocked)
+  const [editingName, setEditingName] = useState<string | null>(null)
+
+  const commitName = () => {
+    if (editingName !== null && editingName.trim()) {
+      renameLayer(layer.id, editingName.trim())
+    }
+    setEditingName(null)
+  }
+
+  return (
+    <div className="inspector-section">
+      <div className="inspector-section-title">Layer</div>
+      <div className="inspector-row">
+        <span className="inspector-label">Name</span>
+        <input
+          className="inspector-input"
+          style={{ width: 100 }}
+          type="text"
+          value={editingName !== null ? editingName : layer.name}
+          onChange={(e) => setEditingName(e.target.value)}
+          onFocus={() => setEditingName(layer.name)}
+          onBlur={commitName}
+          onKeyDown={(e) => { if (e.key === 'Enter') commitName() }}
+        />
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Visible</span>
+        <button
+          className={`inspector-toggle${layer.visible ? ' active' : ''}`}
+          onClick={() => toggleLayerVisibility(layer.id)}
+        >
+          {layer.visible ? 'Yes' : 'No'}
+        </button>
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Locked</span>
+        <button
+          className={`inspector-toggle${layer.locked ? ' active' : ''}`}
+          onClick={() => toggleLayerLocked(layer.id)}
+        >
+          {layer.locked ? 'Yes' : 'No'}
+        </button>
       </div>
     </div>
   )

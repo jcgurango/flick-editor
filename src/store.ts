@@ -59,10 +59,18 @@ interface EditorState {
   setKeyframeEaseDirection: (layerId: string, frame: number, easeDirection: EaseDirection) => void
   updateObjectAttrs: (layerId: string, frame: number, objectId: string, attrs: Record<string, unknown>) => void
   addObjectToKeyframe: (layerId: string, frame: number, object: FlickObject) => void
+  setFrameRate: (fps: number) => void
+  setProjectDimensions: (width: number, height: number) => void
+  setTotalFrames: (totalFrames: number) => void
+  renameLayer: (layerId: string, name: string) => void
+  toggleLayerVisibility: (layerId: string) => void
+  toggleLayerLocked: (layerId: string) => void
+  setAllLayersVisible: (visible: boolean) => void
+  setAllLayersLocked: (locked: boolean) => void
 }
 
 function createDemoProject(): Project {
-  const p = createProject('My Animation')
+  const p = createProject()
   const rectId = generateId()
   const rectId2 = generateId()
 
@@ -256,7 +264,7 @@ export const useStore = create<EditorState>((set) => ({
       set({ isPlaying: false, _playRafId: null })
     } else {
       const frameDuration = 1000 / state.project.frameRate
-      const maxFrame = 60
+      const maxFrame = state.project.totalFrames
       const startTime = Date.now()
       const startFrame = state.currentFrame
 
@@ -383,6 +391,75 @@ export const useStore = create<EditorState>((set) => ({
                 ),
               },
         ),
+      },
+    })),
+
+  setFrameRate: (fps) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: { ...state.project, frameRate: fps },
+    })),
+
+  setProjectDimensions: (width, height) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: { ...state.project, width, height },
+    })),
+
+  setTotalFrames: (totalFrames) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: { ...state.project, totalFrames },
+    })),
+
+  renameLayer: (layerId, name) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId ? layer : { ...layer, name },
+        ),
+      },
+    })),
+
+  toggleLayerVisibility: (layerId) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId ? layer : { ...layer, visible: !layer.visible },
+        ),
+      },
+    })),
+
+  toggleLayerLocked: (layerId) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId ? layer : { ...layer, locked: !layer.locked },
+        ),
+      },
+    })),
+
+  setAllLayersVisible: (visible) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) => ({ ...layer, visible })),
+      },
+    })),
+
+  setAllLayersLocked: (locked) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) => ({ ...layer, locked })),
       },
     })),
 

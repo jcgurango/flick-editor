@@ -34,10 +34,10 @@ export interface Layer {
 
 /** Top-level project. */
 export interface Project {
-  name: string
   frameRate: number
   width: number
   height: number
+  totalFrames: number
   layers: Layer[]
 }
 
@@ -49,12 +49,12 @@ export function generateId(): string {
   return `obj_${Date.now()}_${_nextId++}`
 }
 
-export function createProject(name = 'Untitled'): Project {
+export function createProject(): Project {
   return {
-    name,
     frameRate: 30,
     width: 1920,
     height: 1080,
+    totalFrames: 60,
     layers: [createLayer('Layer 1')],
   }
 }

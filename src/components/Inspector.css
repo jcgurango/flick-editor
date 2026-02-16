@@ -105,3 +105,23 @@
   font-family: monospace;
   font-size: 10px;
 }
+
+.inspector-toggle {
+  height: 22px;
+  padding: 0 10px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.inspector-toggle:hover {
+  border-color: var(--accent);
+}
+
+.inspector-toggle.active {
+  color: var(--text-primary);
+}
