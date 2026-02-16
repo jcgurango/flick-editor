@@ -10,6 +10,9 @@ interface EditorState {
   // Project
   project: Project
   setProject: (project: Project) => void
+  resetProject: (project: Project) => void
+  documentName: string
+  setDocumentName: (name: string) => void
 
   // Undo/Redo
   _undoStack: Project[]
@@ -58,6 +61,8 @@ interface EditorState {
   setPan: (pan: { x: number; y: number }) => void
   containerSize: { width: number; height: number }
   setContainerSize: (size: { width: number; height: number }) => void
+  recenterView: () => void
+  setView100: () => void
 
   // Actions
   setKeyframeTween: (layerId: string, frame: number, tween: TweenType) => void
@@ -199,6 +204,21 @@ function pushUndo(state: EditorState): Partial<EditorState> {
 export const useStore = create<EditorState>((set) => ({
   project: initialProject,
   setProject: (project) => set({ project }),
+  resetProject: (project) => set({
+    project,
+    _undoStack: [],
+    _redoStack: [],
+    currentFrame: 1,
+    activeLayerId: project.layers[0]?.id ?? '',
+    selectedLayerIds: project.layers[0] ? [project.layers[0].id] : [],
+    frameSelection: null,
+    selectedObjectIds: [],
+    clipboard: { type: 'objects', layerId: '', objects: [] },
+    inspectorFocus: 'canvas' as const,
+    isPlaying: false,
+  }),
+  documentName: '',
+  setDocumentName: (documentName) => set({ documentName }),
 
   // Undo/Redo
   _undoStack: [],
@@ -473,6 +493,33 @@ export const useStore = create<EditorState>((set) => ({
   setPan: (pan) => set({ pan }),
   containerSize: { width: 0, height: 0 },
   setContainerSize: (containerSize) => set({ containerSize }),
+  recenterView: () => {
+    const s = useStore.getState()
+    const { width: cw, height: ch } = s.containerSize
+    if (cw === 0 || ch === 0) return
+    const padding = 40
+    const scaleX = (cw - padding * 2) / s.project.width
+    const scaleY = (ch - padding * 2) / s.project.height
+    const fitZoom = Math.min(scaleX, scaleY)
+    set({
+      zoom: fitZoom,
+      pan: {
+        x: (cw - s.project.width * fitZoom) / 2,
+        y: (ch - s.project.height * fitZoom) / 2,
+      },
+    })
+  },
+  setView100: () => {
+    const s = useStore.getState()
+    const { width: cw, height: ch } = s.containerSize
+    set({
+      zoom: 1,
+      pan: {
+        x: (cw - s.project.width) / 2,
+        y: (ch - s.project.height) / 2,
+      },
+    })
+  },
 
   setKeyframeTween: (layerId, frame, tween) =>
     set((state) => ({

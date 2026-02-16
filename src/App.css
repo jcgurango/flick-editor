@@ -24,22 +24,6 @@
   color: var(--accent);
 }
 
-.header-menu {
-  display: flex;
-  gap: 12px;
-}
-
-.header-menu span {
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.header-menu span:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
 
 /* ── Main body (toolbar + canvas + inspector) ── */
 .main-body {

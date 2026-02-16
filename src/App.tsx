@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
 import { useStore } from './store'
-import { getActiveKeyframe, getNextKeyframe, generateId, getSingleSelectedKeyframe } from './types/project'
+import { getActiveKeyframe, getNextKeyframe, generateId, getSingleSelectedKeyframe, createProject } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
 import { dragAttrs, computeScale, computeRotationAttrs } from './lib/transform'
@@ -12,6 +12,8 @@ import { SvgObject } from './components/SvgObject'
 import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
 import { Hierarchy } from './components/Hierarchy'
+import { MenuBar } from './components/MenuBar'
+import { openProject, saveProject, saveProjectAs, clearFileHandle } from './lib/file-io'
 import './App.css'
 
 const ZOOM_SENSITIVITY = 1.1
@@ -85,6 +87,12 @@ function App() {
   const setAllLayersVisible = useStore((s) => s.setAllLayersVisible)
   const setAllLayersLocked = useStore((s) => s.setAllLayersLocked)
   const reorderLayer = useStore((s) => s.reorderLayer)
+  const documentName = useStore((s) => s.documentName)
+
+  // Document title
+  useEffect(() => {
+    document.title = documentName ? `${documentName} - Flick` : 'Flick'
+  }, [documentName])
 
   // Layer drag state for timeline
   const [timelineLayerDrag, setTimelineLayerDrag] = useState<string | null>(null)
@@ -217,6 +225,53 @@ function App() {
         } else {
           s.deleteSelectedLayers()
         }
+        return
+      }
+
+      // File operations
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n' && !e.shiftKey) {
+        e.preventDefault()
+        clearFileHandle()
+        const s = useStore.getState()
+        s.resetProject(createProject())
+        s.setDocumentName('')
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o' && !e.shiftKey) {
+        e.preventDefault()
+        openProject().then((result) => {
+          if (result) {
+            const s = useStore.getState()
+            s.resetProject(result.project)
+            s.setDocumentName(result.name)
+          }
+        })
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
+        e.preventDefault()
+        saveProject(useStore.getState().project).then((name) => {
+          if (name) useStore.getState().setDocumentName(name)
+        })
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 's' && e.shiftKey) {
+        e.preventDefault()
+        saveProjectAs(useStore.getState().project).then((name) => {
+          if (name) useStore.getState().setDocumentName(name)
+        })
+        return
+      }
+
+      // View shortcuts
+      if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        useStore.getState().setView100()
+        return
+      }
+      if ((e.key === '?' || (e.key === '/' && e.shiftKey)) && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        useStore.getState().recenterView()
         return
       }
 
@@ -773,15 +828,7 @@ function App() {
       {/* Header */}
       <div className="header">
         <span className="header-logo">FLICK</span>
-        <div className="header-menu">
-          <span>File</span>
-          <span>Edit</span>
-          <span>View</span>
-          <span>Insert</span>
-          <span>Modify</span>
-          <span>Control</span>
-          <span>Help</span>
-        </div>
+        <MenuBar />
       </div>
 
       {/* Main body */}
