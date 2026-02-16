@@ -394,7 +394,12 @@
 
 .timeline-frame-cell.selected.keyframe-empty::after {
   background: transparent;
-  border-color: var(--accent);
+  border-color: var(--accent-hover);
+}
+
+.timeline-frame-cell.current.selected.keyframe-empty::after {
+  background: transparent;
+  border-color: #fff;
 }
 
 .timeline-frame-cell.current.held {
