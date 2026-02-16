@@ -159,6 +159,8 @@
   position: sticky;
   top: 0;
   z-index: 3;
+  width: fit-content;
+  min-width: 100%;
 }
 
 /* Corner cell: sticky top+left */
@@ -183,6 +185,8 @@
 .timeline-row {
   display: flex;
   position: relative;
+  width: fit-content;
+  min-width: 100%;
 }
 
 .timeline-layers-title {
@@ -214,7 +218,7 @@
   font-size: 11px;
   position: sticky;
   left: 0;
-  z-index: 1;
+  z-index: 2;
   background: var(--bg-panel-alt);
 }
 
