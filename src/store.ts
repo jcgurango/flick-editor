@@ -856,7 +856,7 @@ export const useStore = create<EditorState>((set) => ({
       layers: s.project.layers.map((l: Layer) => ({
           ...l,
           keyframes: l.keyframes.map((k: Keyframe) =>
-            kfs.includes(k) ? k : {
+            !kfs.includes(k) ? k : {
               ...k,
               objects: k.objects.filter((o: FlickObject) => !idsToDelete.has(o.id)),
             },
