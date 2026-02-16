@@ -21,6 +21,8 @@ export interface Keyframe {
   tween: TweenType
   /** Ease direction for the tween. */
   easeDirection: EaseDirection
+  /** If true on the last keyframe, tween wraps back to frame 1. */
+  loop?: boolean
 }
 
 /** A named layer containing keyframed content. */
@@ -53,6 +55,7 @@ export interface FrameClipboardEntry {
   objects: FlickObject[]
   tween: TweenType
   easeDirection: EaseDirection
+  loop?: boolean
 }
 
 export interface FrameClipboardLayer {

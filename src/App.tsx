@@ -621,7 +621,7 @@ function App() {
         for (const layer of s.project.layers) {
           if (!layer.visible || layer.locked) continue
           if (!layer.keyframes.some((kf) => kf.frame === s.currentFrame)) continue
-          const objects = resolveFrame(layer, s.currentFrame)
+          const objects = resolveFrame(layer, s.currentFrame, s.project.totalFrames)
           for (const obj of objects) {
             const bbox = computeBBox(obj)
             if (!bbox) continue
@@ -723,6 +723,11 @@ function App() {
   frameSelectEndRef.current = frameSelectEnd
   const frameSelectShiftRef = useRef(false)
 
+  // Keyframe drag state
+  const [kfDrag, setKfDrag] = useState<{ layerId: string; fromFrame: number; toFrame: number } | null>(null)
+  const kfDragRef = useRef(kfDrag)
+  kfDragRef.current = kfDrag
+
   /** Compute frame number from mouse X on the unified timeline body (accounting for sticky layer column). */
   const frameFromX = useCallback(
     (ev: MouseEvent | React.MouseEvent) => {
@@ -776,6 +781,10 @@ function App() {
         return
       }
 
+      // Check if the clicked cell is a keyframe (for potential keyframe drag)
+      const clickedLayer = project.layers[cell.layerIdx]
+      const isKeyframeCell = clickedLayer?.keyframes.some((k) => k.frame === cell.frame)
+
       // Clear previous selection immediately
       setFrameSelection(null)
 
@@ -784,43 +793,79 @@ function App() {
       frameSelectShiftRef.current = e.shiftKey
       setFrameSelectEnd(cell)
 
+      // Track whether we've switched to keyframe drag mode
+      const isDraggingKf = { current: false }
+      const startLayerIdx = cell.layerIdx
+
       // Move playhead immediately (unless shift)
       if (!e.shiftKey) {
         setCurrentFrame(cell.frame)
-        setActiveLayerId(project.layers[cell.layerIdx].id)
+        setActiveLayerId(clickedLayer.id)
       }
 
       const onMove = (ev: MouseEvent) => {
-        if (!isFrameSelectingRef.current) return
         const end = cellFromEvent(ev)
-        if (end) setFrameSelectEnd(end)
-      }
-      const onUp = () => {
-        isFrameSelectingRef.current = false
-        const start = frameSelectStartRef.current
-        const end = frameSelectEndRef.current
-        if (start && end) {
-          const minFrame = Math.min(start.frame, end.frame)
-          const maxFrame = Math.max(start.frame, end.frame)
-          const minLayer = Math.min(start.layerIdx, end.layerIdx)
-          const maxLayer = Math.max(start.layerIdx, end.layerIdx)
-          const layers = useStore.getState().project.layers
-          const layerIds = layers.slice(minLayer, maxLayer + 1).map(l => l.id)
-          useStore.getState().setFrameSelection({ layerIds, startFrame: minFrame, endFrame: maxFrame })
-          useStore.getState().setInspectorFocus('timeline')
-          if (!frameSelectShiftRef.current) {
-            useStore.getState().setCurrentFrame(minFrame)
-            useStore.getState().setActiveLayerId(layerIds[0])
-          }
+        if (!end) return
+
+        // If started on a keyframe and dragging horizontally within same layer, switch to keyframe drag
+        if (isKeyframeCell && !isDraggingKf.current && end.layerIdx === startLayerIdx && end.frame !== cell.frame) {
+          isDraggingKf.current = true
+          isFrameSelectingRef.current = false
+          setFrameSelectEnd(null)
         }
-        setFrameSelectEnd(null)
+
+        if (isDraggingKf.current) {
+          // Clamp to same layer, update drag target frame
+          const targetFrame = Math.max(1, Math.min(project.totalFrames, end.frame))
+          setKfDrag({ layerId: clickedLayer.id, fromFrame: cell.frame, toFrame: targetFrame })
+        } else if (isFrameSelectingRef.current) {
+          setFrameSelectEnd(end)
+        }
+      }
+
+      const onUp = () => {
+        if (isDraggingKf.current) {
+          // Commit keyframe move
+          const drag = kfDragRef.current
+          if (drag && drag.fromFrame !== drag.toFrame) {
+            const targetLayer = useStore.getState().project.layers.find(l => l.id === drag.layerId)
+            const hasExisting = targetLayer?.keyframes.some(k => k.frame === drag.toFrame)
+            if (hasExisting) {
+              if (confirm(`A keyframe already exists at frame ${drag.toFrame}. Replace it?`)) {
+                useStore.getState().moveKeyframe(drag.layerId, drag.fromFrame, drag.toFrame)
+              }
+            } else {
+              useStore.getState().moveKeyframe(drag.layerId, drag.fromFrame, drag.toFrame)
+            }
+          }
+          setKfDrag(null)
+        } else {
+          isFrameSelectingRef.current = false
+          const start = frameSelectStartRef.current
+          const end = frameSelectEndRef.current
+          if (start && end) {
+            const minFrame = Math.min(start.frame, end.frame)
+            const maxFrame = Math.max(start.frame, end.frame)
+            const minLayer = Math.min(start.layerIdx, end.layerIdx)
+            const maxLayer = Math.max(start.layerIdx, end.layerIdx)
+            const layers = useStore.getState().project.layers
+            const layerIds = layers.slice(minLayer, maxLayer + 1).map(l => l.id)
+            useStore.getState().setFrameSelection({ layerIds, startFrame: minFrame, endFrame: maxFrame })
+            useStore.getState().setInspectorFocus('timeline')
+            if (!frameSelectShiftRef.current) {
+              useStore.getState().setCurrentFrame(minFrame)
+              useStore.getState().setActiveLayerId(layerIds[0])
+            }
+          }
+          setFrameSelectEnd(null)
+        }
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
       }
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
     },
-    [cellFromEvent, frameFromX, setCurrentFrame, setActiveLayerId, setFrameSelection, project.layers],
+    [cellFromEvent, frameFromX, setCurrentFrame, setActiveLayerId, setFrameSelection, project.layers, project.totalFrames],
   )
 
   return (
@@ -869,9 +914,6 @@ function App() {
                 <filter id="canvas-shadow" x="-5%" y="-5%" width="110%" height="110%">
                   <feDropShadow dx="0" dy="4" stdDeviation="10" floodColor="rgba(0,0,0,0.4)" />
                 </filter>
-                <clipPath id="canvas-clip">
-                  <rect x={0} y={0} width={project.width} height={project.height} />
-                </clipPath>
               </defs>
 
               <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
@@ -885,13 +927,13 @@ function App() {
                   pointerEvents="all"
                 />
 
-                <g clipPath="url(#canvas-clip)" pointerEvents={activeTool === 'select' ? undefined : 'none'}>
+                <g pointerEvents={activeTool === 'select' ? undefined : 'none'}>
                   {project.layers
                     .filter((l) => l.visible)
                     .slice()
                     .reverse()
                     .map((layer) => {
-                      const objects = resolveFrame(layer, currentFrame)
+                      const objects = resolveFrame(layer, currentFrame, project.totalFrames)
                       const isOnKeyframe = layer.keyframes.some((kf) => kf.frame === currentFrame)
                       return (
                         <g key={layer.id} data-layer-id={layer.id}>
@@ -984,7 +1026,7 @@ function App() {
                 {activeTool === 'select' && selectedObjectIds.length > 0 && (() => {
                   const allObjects = project.layers
                     .filter((l) => l.visible)
-                    .flatMap((l) => resolveFrame(l, currentFrame))
+                    .flatMap((l) => resolveFrame(l, currentFrame, project.totalFrames))
                   const singleSelected = selectedObjectIds.length === 1
 
                   return selectedObjectIds.map((selId) => {
@@ -1225,6 +1267,8 @@ function App() {
                     const maxL = Math.max(start.layerIdx, end.layerIdx)
                     return frameNum >= minF && frameNum <= maxF && layerIdx >= minL && layerIdx <= maxL
                   })()
+                  const isKfDragSource = kfDrag?.layerId === layer.id && kfDrag.fromFrame === frameNum
+                  const isKfDragTarget = kfDrag?.layerId === layer.id && kfDrag.toFrame === frameNum && kfDrag.fromFrame !== kfDrag.toFrame
                   return (
                     <div
                       key={i}
@@ -1234,6 +1278,8 @@ function App() {
                         frameType,
                         frameNum === currentFrame && 'current',
                         (isSelected || isInDragSelect) && 'selected',
+                        isKfDragSource && 'kf-drag-source',
+                        isKfDragTarget && 'kf-drag-target',
                       ]
                         .filter(Boolean)
                         .join(' ')}

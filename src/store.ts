@@ -84,6 +84,8 @@ interface EditorState {
   addLayer: () => void
   reorderLayer: (layerId: string, newIndex: number) => void
   reorderLayers: (layerIds: string[], newIndex: number) => void
+  setKeyframeLoop: (layerId: string, frame: number, loop: boolean) => void
+  moveKeyframe: (layerId: string, fromFrame: number, toFrame: number) => void
   deleteSelectedObjects: () => void
   deleteKeyframe: (layerId: string, frame: number) => void
   deleteFrameSelection: () => void
@@ -324,6 +326,7 @@ export const useStore = create<EditorState>((set) => ({
             objects: JSON.parse(JSON.stringify(kf.objects)),
             tween: kf.tween,
             easeDirection: kf.easeDirection,
+            ...(kf.loop ? { loop: true } : {}),
           }
         } else if (offset === 0) {
           // First frame of range: resolve interpolated state
@@ -369,6 +372,7 @@ export const useStore = create<EditorState>((set) => ({
         // Overwrite tween settings
         kf.tween = clipEntry.tween
         kf.easeDirection = clipEntry.easeDirection
+        kf.loop = clipEntry.loop
 
         // Replace existing objects by ID, append only if no match exists
         for (const obj of clipEntry.objects) {
@@ -838,6 +842,51 @@ export const useStore = create<EditorState>((set) => ({
       return {
         ...pushUndo(state),
         project: { ...state.project, layers },
+      }
+    }),
+
+  setKeyframeLoop: (layerId, frame, loop) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        layers: state.project.layers.map((layer) =>
+          layer.id !== layerId
+            ? layer
+            : {
+                ...layer,
+                keyframes: layer.keyframes.map((kf) =>
+                  kf.frame !== frame ? kf : { ...kf, loop },
+                ),
+              },
+        ),
+      },
+    })),
+
+  moveKeyframe: (layerId, fromFrame, toFrame) =>
+    set((state) => {
+      if (fromFrame === toFrame) return state
+      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      if (!layer) return state
+      const kfIdx = layer.keyframes.findIndex((k: Keyframe) => k.frame === fromFrame)
+      if (kfIdx === -1) return state
+      const existingIdx = layer.keyframes.findIndex((k: Keyframe) => k.frame === toFrame)
+      const newKeyframes = [...layer.keyframes]
+      // Remove existing keyframe at target if present
+      if (existingIdx !== -1) {
+        newKeyframes.splice(existingIdx, 1)
+      }
+      // Update the moved keyframe's frame number (re-find index since splice may have shifted it)
+      const movedIdx = newKeyframes.findIndex((k: Keyframe) => k.frame === fromFrame)
+      newKeyframes[movedIdx] = { ...newKeyframes[movedIdx], frame: toFrame }
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) =>
+            l.id !== layerId ? l : { ...l, keyframes: newKeyframes },
+          ),
+        },
       }
     }),
 

@@ -82,7 +82,7 @@ export function renderFrameToSvg(project: Project, frame: number): string {
   const visibleLayers = project.layers.filter((l) => l.visible).slice().reverse()
 
   for (const layer of visibleLayers) {
-    const objects = resolveFrame(layer, frame)
+    const objects = resolveFrame(layer, frame, project.totalFrames)
     if (objects.length === 0) continue
     parts.push(`  <g>`)
     for (const obj of objects) {

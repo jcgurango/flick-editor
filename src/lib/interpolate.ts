@@ -175,7 +175,7 @@ function interpolateObjects(
  * Resolve the objects to render for a layer at a given frame,
  * applying tween interpolation if configured.
  */
-export function resolveFrame(layer: Layer, frame: number): FlickObject[] {
+export function resolveFrame(layer: Layer, frame: number, totalFrames?: number): FlickObject[] {
   const kfA = getActiveKeyframe(layer, frame)
   if (!kfA) return []
 
@@ -183,7 +183,22 @@ export function resolveFrame(layer: Layer, frame: number): FlickObject[] {
   if (kfA.tween === 'discrete') return kfA.objects
 
   const kfB = getNextKeyframe(layer, kfA.frame)
-  if (!kfB) return kfA.objects
+
+  if (!kfB) {
+    // No next keyframe — check for loop
+    if (kfA.loop && totalFrames && layer.keyframes.length > 0) {
+      const firstKf = layer.keyframes.reduce((a, b) => a.frame < b.frame ? a : b)
+      if (firstKf.frame !== kfA.frame && firstKf.objects.length > 0) {
+        if (frame === kfA.frame) return kfA.objects
+        // Interpolate from kfA toward firstKf, treating totalFrames+1 as the virtual target
+        const span = totalFrames + 1 - kfA.frame
+        const rawT = (frame - kfA.frame) / span
+        const easedT = getEasedT(rawT, kfA.tween, kfA.easeDirection)
+        return interpolateObjects(kfA.objects, firstKf.objects, easedT)
+      }
+    }
+    return kfA.objects
+  }
 
   // If we're exactly on kfA, return its objects directly
   if (frame === kfA.frame) return kfA.objects

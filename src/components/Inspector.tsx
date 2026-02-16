@@ -23,9 +23,10 @@ const EASE_DIRS: { value: EaseDirection; label: string }[] = [
   { value: 'in-out', label: 'Ease In-Out' },
 ]
 
-function TweenSection({ layerId, kf }: { layerId: string; kf: { frame: number; tween: TweenType; easeDirection: EaseDirection } }) {
+function TweenSection({ layerId, kf }: { layerId: string; kf: { frame: number; tween: TweenType; easeDirection: EaseDirection; loop?: boolean } }) {
   const setKeyframeTween = useStore((s) => s.setKeyframeTween)
   const setKeyframeEaseDirection = useStore((s) => s.setKeyframeEaseDirection)
+  const setKeyframeLoop = useStore((s) => s.setKeyframeLoop)
 
   return (
     <div className="inspector-section">
@@ -54,6 +55,16 @@ function TweenSection({ layerId, kf }: { layerId: string; kf: { frame: number; t
             <option key={ed.value} value={ed.value}>{ed.label}</option>
           ))}
         </select>
+      </div>
+      <div className="inspector-row">
+        <span className="inspector-label">Loop</span>
+        <button
+          className={`inspector-toggle${kf.loop ? ' active' : ''}`}
+          disabled={kf.tween === 'discrete'}
+          onClick={() => setKeyframeLoop(layerId, kf.frame, !kf.loop)}
+        >
+          {kf.loop ? 'Yes' : 'No'}
+        </button>
       </div>
     </div>
   )
