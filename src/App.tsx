@@ -104,6 +104,7 @@ function App() {
   const [inspectorWidth, setInspectorWidth] = useState(240)
 
   const handleTimelineResize = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.preventDefault()
     const startY = e.clientY
     const startH = timelineHeight
@@ -119,6 +120,7 @@ function App() {
   }, [timelineHeight])
 
   const handleInspectorResize = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.preventDefault()
     const startX = e.clientX
     const startW = inspectorWidth
@@ -330,6 +332,7 @@ function App() {
   // SVG mousedown: pan (select + shift) or start drawing (rect/ellipse tool)
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<SVGSVGElement>) => {
+      if (e.button !== 0) return
       const s = useStore.getState()
 
       if (s.activeTool === 'select' && e.shiftKey) {
@@ -690,6 +693,7 @@ function App() {
 
   const handleTimelineMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (e.button !== 0) return
       const cell = cellFromEvent(e)
 
       if (!cell) {
@@ -854,6 +858,7 @@ function App() {
                                 useStore.getState().setInspectorFocus('canvas')
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
+                                if (e.button !== 0) return
                                 if (!isOnKeyframe || layer.locked || e.shiftKey) return
                                 if (e.ctrlKey || e.metaKey) return // ctrl-click handled in onClick
                                 // Find the keyframe object (not interpolated) for editing
@@ -944,6 +949,7 @@ function App() {
                         obj={selObj}
                         zoom={zoom}
                         onHandleMouseDown={singleSelected ? (handle, e) => {
+                          if (e.button !== 0) return
                           e.stopPropagation()
                           const layer = project.layers.find((l) => l.id === activeLayerId)
                           const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
@@ -955,6 +961,7 @@ function App() {
                           scaleObjRef.current = { id: kfObj.id, layerId: layer.id, type: kfObj.type, attrs: { ...kfObj.attrs } }
                         } : undefined}
                         onRotateMouseDown={singleSelected ? (corner: RotateCorner, e: React.MouseEvent) => {
+                          if (e.button !== 0) return
                           e.stopPropagation()
                           const layer = project.layers.find((l) => l.id === activeLayerId)
                           const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
