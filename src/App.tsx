@@ -39,9 +39,9 @@ const TOOLS = [
 /**
  * Determine the display type of a frame cell in the timeline.
  */
-function getFrameType(layer: Layer, frame: number): 'keyframe' | 'tweened' | 'held' | 'empty' {
+function getFrameType(layer: Layer, frame: number): 'keyframe' | 'keyframe-empty' | 'tweened' | 'held' | 'empty' {
   for (const kf of layer.keyframes) {
-    if (kf.frame === frame) return 'keyframe'
+    if (kf.frame === frame) return kf.objects.length > 0 ? 'keyframe' : 'keyframe-empty'
   }
   const active = getActiveKeyframe(layer, frame)
   if (!active) return 'empty'
@@ -157,6 +157,22 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         e.preventDefault()
         useStore.getState().pasteObjects()
+        return
+      }
+
+      // Insert keyframe (F6) / blank keyframe (F7)
+      if (e.key === 'F6' || e.key === 'F7') {
+        e.preventDefault()
+        const s = useStore.getState()
+        const layerId = s.selectedKeyframe?.layerId ?? s.activeLayerId
+        if (layerId) {
+          if (e.key === 'F6') {
+            s.insertKeyframe(layerId, s.currentFrame)
+          } else {
+            s.insertBlankKeyframe(layerId, s.currentFrame)
+          }
+          s.setSelectedKeyframe({ layerId, frame: s.currentFrame })
+        }
         return
       }
 
@@ -498,6 +514,7 @@ function App() {
     // Box select
     if (isBoxSelectingRef.current) {
       isBoxSelectingRef.current = false
+      useStore.getState().setInspectorFocus('canvas')
       if (boxSelectRect && (boxSelectRect.width > 2 || boxSelectRect.height > 2)) {
         // Find all objects whose rotated AABB intersects the marquee
         const s = useStore.getState()
@@ -618,17 +635,13 @@ function App() {
     [scrubToX, setSelectedKeyframe],
   )
 
-  // Keyframe cell click — select keyframe if it's a keyframe cell
+  // Timeline cell click — select frame (and keyframe if applicable)
   const handleCellClick = useCallback(
-    (layerId: string, frame: number, isKeyframe: boolean, e: React.MouseEvent) => {
+    (layerId: string, frame: number, _isKeyframe: boolean, e: React.MouseEvent) => {
       e.stopPropagation()
-      if (isKeyframe) {
-        setSelectedKeyframe({ layerId, frame })
-        setCurrentFrame(frame)
-      } else {
-        setSelectedKeyframe(null)
-        setCurrentFrame(frame)
-      }
+      setSelectedKeyframe({ layerId, frame })
+      setCurrentFrame(frame)
+      useStore.getState().setInspectorFocus('timeline')
     },
     [setSelectedKeyframe, setCurrentFrame],
   )
@@ -727,6 +740,7 @@ function App() {
                                 }
                                 setActiveLayerId(layer.id)
                                 setSelectedKeyframe(null)
+                                useStore.getState().setInspectorFocus('canvas')
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe || layer.locked || e.shiftKey) return
@@ -968,9 +982,8 @@ function App() {
                   {Array.from({ length: project.totalFrames }, (_, i) => {
                     const frameNum = i + 1
                     const frameType = getFrameType(layer, frameNum)
-                    const isKf = frameType === 'keyframe'
+                    const isKf = frameType === 'keyframe' || frameType === 'keyframe-empty'
                     const isSelected =
-                      isKf &&
                       selectedKeyframe?.layerId === layer.id &&
                       selectedKeyframe?.frame === frameNum
                     return (

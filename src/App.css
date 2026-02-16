@@ -316,6 +316,26 @@
   transform: translate(-50%, -50%);
 }
 
+/* Empty keyframe cell: outline circle */
+.timeline-frame-cell.keyframe-empty {
+  background: var(--bg-active);
+  position: relative;
+}
+
+.timeline-frame-cell.keyframe-empty::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: transparent;
+  border: 1.5px solid var(--text-primary);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+
 /* Held frame: lighter fill to show content extends */
 .timeline-frame-cell.held {
   background: var(--bg-panel-alt);
@@ -361,6 +381,20 @@
 
 .timeline-frame-cell.current.keyframe::after {
   background: #fff;
+}
+
+.timeline-frame-cell.current.keyframe-empty {
+  background: var(--accent);
+}
+
+.timeline-frame-cell.current.keyframe-empty::after {
+  background: transparent;
+  border-color: #fff;
+}
+
+.timeline-frame-cell.selected.keyframe-empty::after {
+  background: transparent;
+  border-color: var(--accent);
 }
 
 .timeline-frame-cell.current.held {

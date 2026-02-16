@@ -65,6 +65,7 @@ export function Inspector() {
   const activeLayerId = useStore((s) => s.activeLayerId)
   const currentFrame = useStore((s) => s.currentFrame)
   const updateObjectAttrs = useStore((s) => s.updateObjectAttrs)
+  const inspectorFocus = useStore((s) => s.inspectorFocus)
 
   // Find selected object on the active keyframe
   const activeLayer = project.layers.find((l) => l.id === activeLayerId)
@@ -73,55 +74,7 @@ export function Inspector() {
     ? activeKf.objects.find((o) => o.id === selectedObjectIds[0])
     : null
 
-  // Mode 1a: Multiple objects selected
-  if (selectedObjectIds.length > 1 && activeLayer && activeKf) {
-    return (
-      <div className="inspector">
-        <div className="inspector-section">
-          <div className="inspector-section-title">Selection</div>
-          <div className="inspector-section-subtitle">
-            {selectedObjectIds.length} objects selected
-          </div>
-        </div>
-        <TweenSection layerId={activeLayer.id} kf={activeKf} />
-      </div>
-    )
-  }
-
-  // Mode 1b: Single object selected on a keyframe
-  if (selectedObj && activeLayer && activeKf) {
-    const fields = OBJECT_FIELDS[selectedObj.type] ?? []
-    const typeName = TYPE_NAMES[selectedObj.type] ?? selectedObj.type
-
-    return (
-      <div className="inspector">
-        <div className="inspector-section">
-          <div className="inspector-section-title">{typeName}</div>
-          <div className="inspector-section-subtitle">
-            {selectedObj.id.slice(-8)}
-          </div>
-        </div>
-
-        <div className="inspector-section">
-          <div className="inspector-section-title">Properties</div>
-          {fields.map((field) => (
-            <InspectorField
-              key={field.key}
-              field={field}
-              value={selectedObj.attrs[field.key]}
-              onChange={(val) =>
-                updateObjectAttrs(activeLayer.id, activeKf.frame, selectedObj.id, { [field.key]: val })
-              }
-            />
-          ))}
-        </div>
-
-        <TweenSection layerId={activeLayer.id} kf={activeKf} />
-      </div>
-    )
-  }
-
-  // Mode 2: Keyframe selected (no object)
+  // Resolve keyframe data for timeline selection
   const selectedKfData = selectedKeyframe
     ? (() => {
         const layer = project.layers.find((l) => l.id === selectedKeyframe.layerId)
@@ -130,7 +83,59 @@ export function Inspector() {
       })()
     : null
 
-  if (selectedKfData) {
+  // Canvas focus: show object properties
+  if (inspectorFocus === 'canvas') {
+    // Multi-select
+    if (selectedObjectIds.length > 1 && activeLayer && activeKf) {
+      return (
+        <div className="inspector">
+          <div className="inspector-section">
+            <div className="inspector-section-title">Selection</div>
+            <div className="inspector-section-subtitle">
+              {selectedObjectIds.length} objects selected
+            </div>
+          </div>
+          <TweenSection layerId={activeLayer.id} kf={activeKf} />
+        </div>
+      )
+    }
+
+    // Single object selected
+    if (selectedObj && activeLayer && activeKf) {
+      const fields = OBJECT_FIELDS[selectedObj.type] ?? []
+      const typeName = TYPE_NAMES[selectedObj.type] ?? selectedObj.type
+
+      return (
+        <div className="inspector">
+          <div className="inspector-section">
+            <div className="inspector-section-title">{typeName}</div>
+            <div className="inspector-section-subtitle">
+              {selectedObj.id.slice(-8)}
+            </div>
+          </div>
+
+          <div className="inspector-section">
+            <div className="inspector-section-title">Properties</div>
+            {fields.map((field) => (
+              <InspectorField
+                key={field.key}
+                field={field}
+                value={selectedObj.attrs[field.key]}
+                onChange={(val) =>
+                  updateObjectAttrs(activeLayer.id, activeKf.frame, selectedObj.id, { [field.key]: val })
+                }
+              />
+            ))}
+          </div>
+
+          <TweenSection layerId={activeLayer.id} kf={activeKf} />
+        </div>
+      )
+    }
+  }
+
+  // Timeline focus: show keyframe/frame info
+  if (inspectorFocus === 'timeline' && selectedKfData) {
     return (
       <div className="inspector">
         <div className="inspector-section">
@@ -163,7 +168,7 @@ export function Inspector() {
     )
   }
 
-  // Mode 3: Nothing selected — scene + layer properties
+  // Default: scene + layer properties
   return (
     <div className="inspector">
       <SceneSection />

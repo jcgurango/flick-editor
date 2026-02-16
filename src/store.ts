@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
 import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject } from './types/project'
 import { recenterPath } from './lib/transform'
+import { resolveFrame } from './lib/interpolate'
 
 export interface SelectedKeyframe {
   layerId: string
@@ -45,6 +46,8 @@ interface EditorState {
   selectedObjectIds: string[]
   setSelectedObjectIds: (ids: string[]) => void
   toggleSelectedObjectId: (id: string) => void
+  inspectorFocus: 'canvas' | 'timeline'
+  setInspectorFocus: (focus: 'canvas' | 'timeline') => void
 
   // Viewport
   zoom: number
@@ -67,6 +70,8 @@ interface EditorState {
   toggleLayerLocked: (layerId: string) => void
   setAllLayersVisible: (visible: boolean) => void
   setAllLayersLocked: (locked: boolean) => void
+  insertKeyframe: (layerId: string, frame: number) => void
+  insertBlankKeyframe: (layerId: string, frame: number) => void
 }
 
 function createDemoProject(): Project {
@@ -303,6 +308,8 @@ export const useStore = create<EditorState>((set) => ({
         ? state.selectedObjectIds.filter((oid) => oid !== id)
         : [...state.selectedObjectIds, id],
     })),
+  inspectorFocus: 'canvas' as const,
+  setInspectorFocus: (inspectorFocus) => set({ inspectorFocus }),
 
   zoom: 1,
   setZoom: (zoom) => set({ zoom }),
@@ -462,5 +469,48 @@ export const useStore = create<EditorState>((set) => ({
         layers: state.project.layers.map((layer) => ({ ...layer, locked })),
       },
     })),
+
+  insertKeyframe: (layerId, frame) =>
+    set((state) => {
+      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      if (!layer) return state
+      // Don't insert if a keyframe already exists at this frame
+      if (layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
+      // Resolve the interpolated objects at this frame
+      const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(layer, frame)))
+      const newKf: Keyframe = { frame, objects, tween: 'discrete', easeDirection: 'in-out' }
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) =>
+            l.id !== layerId ? l : {
+              ...l,
+              keyframes: [...l.keyframes, newKf].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
+            },
+          ),
+        },
+      }
+    }),
+
+  insertBlankKeyframe: (layerId, frame) =>
+    set((state) => {
+      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      if (!layer) return state
+      if (layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
+      const newKf: Keyframe = { frame, objects: [], tween: 'discrete', easeDirection: 'in-out' }
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) =>
+            l.id !== layerId ? l : {
+              ...l,
+              keyframes: [...l.keyframes, newKf].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
+            },
+          ),
+        },
+      }
+    }),
 
 }))
