@@ -82,6 +82,12 @@ function App() {
   const toggleLayerLocked = useStore((s) => s.toggleLayerLocked)
   const setAllLayersVisible = useStore((s) => s.setAllLayersVisible)
   const setAllLayersLocked = useStore((s) => s.setAllLayersLocked)
+  const reorderLayer = useStore((s) => s.reorderLayer)
+
+  // Layer drag state for timeline
+  const [timelineLayerDrag, setTimelineLayerDrag] = useState<string | null>(null)
+  const [timelineLayerDropIdx, setTimelineLayerDropIdx] = useState<number | null>(null)
+
   // Drag preview: a ghost object shown during dragging (not yet committed)
   const [dragPreview, setDragPreview] = useState<FlickObject | null>(null)
   // Scale preview: a ghost object shown during scaling (not yet committed)
@@ -960,31 +966,68 @@ function App() {
                 </button>
               </div>
             </div>
-            {project.layers.map((layer) => (
-              <div
-                key={layer.id}
-                className={`timeline-layer${layer.id === activeLayerId ? ' active' : ''}`}
-                onClick={() => setActiveLayerId(layer.id)}
-              >
-                <span className="timeline-layer-icon">■</span>
-                <span className="timeline-layer-name">{layer.name}</span>
-                <div className="timeline-layer-actions">
-                  <button
-                    title="Toggle visibility"
-                    style={{ opacity: layer.visible ? 1 : 0.3 }}
-                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id) }}
-                  >
-                    👁
-                  </button>
-                  <button
-                    title="Toggle lock"
-                    onClick={(e) => { e.stopPropagation(); toggleLayerLocked(layer.id) }}
-                  >
-                    {layer.locked ? '🔒' : '🔓'}
-                  </button>
+            {project.layers.map((layer, layerIdx) => (
+              <div key={layer.id}>
+                {timelineLayerDrag && timelineLayerDropIdx === layerIdx && (
+                  <div className="timeline-layer-drop-indicator" />
+                )}
+                <div
+                  className={[
+                    'timeline-layer',
+                    layer.id === activeLayerId && 'active',
+                    timelineLayerDrag === layer.id && 'dragging',
+                  ].filter(Boolean).join(' ')}
+                  draggable
+                  onClick={() => setActiveLayerId(layer.id)}
+                  onDragStart={(e) => {
+                    setTimelineLayerDrag(layer.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.setData('text/plain', layer.id)
+                  }}
+                  onDragEnd={() => { setTimelineLayerDrag(null); setTimelineLayerDropIdx(null) }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (timelineLayerDrag) {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const midY = rect.top + rect.height / 2
+                      setTimelineLayerDropIdx(e.clientY < midY ? layerIdx : layerIdx + 1)
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    if (!timelineLayerDrag) return
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    const midY = rect.top + rect.height / 2
+                    const idx = e.clientY < midY ? layerIdx : layerIdx + 1
+                    reorderLayer(timelineLayerDrag, idx)
+                    setTimelineLayerDrag(null)
+                    setTimelineLayerDropIdx(null)
+                  }}
+                >
+                  <span className="timeline-layer-icon">■</span>
+                  <span className="timeline-layer-name">{layer.name}</span>
+                  <div className="timeline-layer-actions">
+                    <button
+                      title="Toggle visibility"
+                      style={{ opacity: layer.visible ? 1 : 0.3 }}
+                      onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id) }}
+                    >
+                      👁
+                    </button>
+                    <button
+                      title="Toggle lock"
+                      onClick={(e) => { e.stopPropagation(); toggleLayerLocked(layer.id) }}
+                    >
+                      {layer.locked ? '🔒' : '🔓'}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
+            {timelineLayerDrag && timelineLayerDropIdx === project.layers.length && (
+              <div className="timeline-layer-drop-indicator" />
+            )}
           </div>
 
           {/* Frames grid */}

@@ -205,6 +205,16 @@
   background: var(--bg-active);
 }
 
+.timeline-layer.dragging {
+  opacity: 0.3;
+}
+
+.timeline-layer-drop-indicator {
+  height: 2px;
+  background: var(--accent);
+  margin: 0 6px;
+}
+
 .timeline-layer-icon {
   color: var(--text-muted);
   font-size: 10px;

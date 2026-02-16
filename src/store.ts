@@ -74,6 +74,7 @@ interface EditorState {
   insertBlankKeyframe: (layerId: string, frame: number) => void
   reorderObject: (layerId: string, objectId: string, newIndex: number) => void
   moveObjectToLayer: (objectId: string, fromLayerId: string, toLayerId: string, insertIndex: number) => void
+  reorderLayer: (layerId: string, newIndex: number) => void
 }
 
 function createDemoProject(): Project {
@@ -584,6 +585,20 @@ export const useStore = create<EditorState>((set) => ({
             return l
           }),
         },
+      }
+    }),
+
+  reorderLayer: (layerId, newIndex) =>
+    set((state) => {
+      const idx = state.project.layers.findIndex((l: Layer) => l.id === layerId)
+      if (idx === -1 || idx === newIndex) return state
+      const layers = [...state.project.layers]
+      const [layer] = layers.splice(idx, 1)
+      const insertAt = Math.min(newIndex, layers.length)
+      layers.splice(insertAt, 0, layer)
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, layers },
       }
     }),
 
