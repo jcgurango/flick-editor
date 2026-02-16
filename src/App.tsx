@@ -185,6 +185,25 @@ function App() {
         return
       }
 
+      // Delete
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        const s = useStore.getState()
+        if (s.inspectorFocus === 'canvas' && s.selectedObjectIds.length > 0) {
+          s.deleteSelectedObjects()
+        } else if (s.inspectorFocus === 'timeline' && s.selectedKeyframe) {
+          const layer = s.project.layers.find((l) => l.id === s.selectedKeyframe!.layerId)
+          const isKf = layer?.keyframes.some((kf) => kf.frame === s.selectedKeyframe!.frame)
+          if (isKf) {
+            s.deleteKeyframe(s.selectedKeyframe.layerId, s.selectedKeyframe.frame)
+          }
+        } else {
+          // Default: delete active layer
+          s.deleteLayer(s.activeLayerId)
+        }
+        return
+      }
+
       // Arrow key nudge
       const s = useStore.getState()
       if (s.selectedObjectIds.length > 0 && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {

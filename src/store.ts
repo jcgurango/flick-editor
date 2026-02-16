@@ -75,6 +75,9 @@ interface EditorState {
   reorderObject: (layerId: string, objectId: string, newIndex: number) => void
   moveObjectToLayer: (objectId: string, fromLayerId: string, toLayerId: string, insertIndex: number) => void
   reorderLayer: (layerId: string, newIndex: number) => void
+  deleteSelectedObjects: () => void
+  deleteKeyframe: (layerId: string, frame: number) => void
+  deleteLayer: (layerId: string) => void
 }
 
 function createDemoProject(): Project {
@@ -599,6 +602,70 @@ export const useStore = create<EditorState>((set) => ({
       return {
         ...pushUndo(state),
         project: { ...state.project, layers },
+      }
+    }),
+
+  deleteSelectedObjects: () => {
+    const s: EditorState = useStore.getState()
+    if (s.selectedObjectIds.length === 0) return
+    const kfs = s.project
+      .layers
+      .map(l => l.keyframes.find((k: Keyframe) => k.frame === s.currentFrame))
+      .filter(Boolean)
+
+    if (!kfs.length) return
+    const idsToDelete = new Set(s.selectedObjectIds)
+    const newProject: Project = {
+      ...s.project,
+      layers: s.project.layers.map((l: Layer) => ({
+          ...l,
+          keyframes: l.keyframes.map((k: Keyframe) =>
+            kfs.includes(k) ? k : {
+              ...k,
+              objects: k.objects.filter((o: FlickObject) => !idsToDelete.has(o.id)),
+            },
+          ),
+        }),
+      ),
+    }
+    set({
+      ...pushUndo(s),
+      project: newProject,
+      selectedObjectIds: [],
+    })
+  },
+
+  deleteKeyframe: (layerId, frame) =>
+    set((state) => {
+      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      if (!layer) return state
+      if (!layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
+      return {
+        ...pushUndo(state),
+        project: {
+          ...state.project,
+          layers: state.project.layers.map((l: Layer) =>
+            l.id !== layerId ? l : {
+              ...l,
+              keyframes: l.keyframes.filter((kf: Keyframe) => kf.frame !== frame),
+            },
+          ),
+        },
+        selectedKeyframe: null,
+      }
+    }),
+
+  deleteLayer: (layerId) =>
+    set((state) => {
+      if (state.project.layers.length <= 1) return state // don't delete last layer
+      const layers = state.project.layers.filter((l: Layer) => l.id !== layerId)
+      const newActiveId = state.activeLayerId === layerId ? layers[0].id : state.activeLayerId
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, layers },
+        activeLayerId: newActiveId,
+        selectedKeyframe: null,
+        selectedObjectIds: [],
       }
     }),
 
