@@ -5,21 +5,17 @@ import './Breadcrumb.css'
 export function Breadcrumb() {
   const editContext = useStore((s) => s.editContext)
   const project = useStore((s) => s.project)
-  const currentFrame = useStore((s) => s.currentFrame)
   const exitToStage = useStore((s) => s.exitToStage)
   const exitEditContext = useStore((s) => s.exitEditContext)
 
   if (editContext.length === 0) return null
 
   const getEntryLabel = (entry: EditContextEntry, _index: number): string => {
-    // Find the object name from the layer
-    const layer = project.layers.find((l) => l.id === entry.layerId)
-    if (!layer) return entry.type
-    const kf = layer.keyframes.find((k) => k.frame === currentFrame)
-      ?? layer.keyframes[0]
-    const obj = kf?.objects.find((o) => o.id === entry.objectId)
-    if (!obj) return entry.type
-    return entry.type === 'group' ? `Group` : `Clip`
+    if (entry.type === 'clip' && entry.clipId) {
+      const clip = project.clips.find((c) => c.id === entry.clipId)
+      return clip?.name ?? 'Clip'
+    }
+    return 'Group'
   }
 
   const navigateTo = (depth: number) => {

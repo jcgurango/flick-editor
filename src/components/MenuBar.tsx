@@ -258,6 +258,13 @@ export function MenuBar() {
             return !obj || obj.type !== 'group'
           })(),
         },
+        { separator: true, label: '' },
+        {
+          label: 'Create Clip',
+          shortcut: 'F8',
+          action: () => useStore.getState().createClipFromSelection(),
+          disabled: selectedObjectIds.length === 0,
+        },
       ],
     },
     {

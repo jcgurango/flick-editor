@@ -1,5 +1,5 @@
-import type { Project, FlickObject } from '../types/project'
-import { resolveFrame } from './interpolate'
+import type { Project, FlickObject, Layer } from '../types/project'
+import { resolveFrame, resolveClipFrame, resolveClipObjects } from './interpolate'
 import { computeBBox, absoluteOrigin } from './bbox'
 
 const CAMEL_TO_KEBAB: Record<string, string> = {
@@ -23,7 +23,7 @@ function escapeAttr(val: unknown): string {
   return String(val).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
-function flickObjectToSvg(obj: FlickObject): string {
+function flickObjectToSvg(obj: FlickObject, project: Project, parentLayer: Layer, parentFrame: number, visitedClipIds?: Set<string>): string {
   const { type, attrs } = obj
   const { rotation, ...rest } = attrs as Record<string, unknown> & { rotation?: number }
 
@@ -40,15 +40,15 @@ function flickObjectToSvg(obj: FlickObject): string {
   }
 
   let svgAttrs: Record<string, unknown> = rest
-  if (type === 'path' || type === 'group') {
-    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, ...otherAttrs } = rest as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number }
+  if (type === 'path' || type === 'group' || type === 'clip') {
+    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, clipId: _cid, setFrame: _sf, ...otherAttrs } = rest as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number; clipId?: string; setFrame?: number }
     svgAttrs = otherAttrs
     const px = (x as number) ?? 0
     const py = (y as number) ?? 0
     if (px || py) {
       transforms.push(`translate(${px}, ${py})`)
     }
-    if (type === 'group') {
+    if (type === 'group' || type === 'clip') {
       const sx = (attrs.scaleX as number) ?? 1
       const sy = (attrs.scaleY as number) ?? 1
       if (sx !== 1 || sy !== 1) {
@@ -61,7 +61,24 @@ function flickObjectToSvg(obj: FlickObject): string {
   if (type === 'group') {
     const children = (attrs.children as FlickObject[]) ?? []
     const transformAttr = transforms.length > 0 ? ` transform="${transforms.join(' ')}"` : ''
-    const childSvg = children.map(c => flickObjectToSvg(c)).join('\n    ')
+    const childSvg = children.map(c => flickObjectToSvg(c, project, parentLayer, parentFrame, visitedClipIds)).join('\n    ')
+    return `<g${transformAttr}>\n    ${childSvg}\n  </g>`
+  }
+
+  // Clip rendering
+  if (type === 'clip') {
+    const clipId = attrs.clipId as string | undefined
+    const visited = visitedClipIds ?? new Set<string>()
+    if (clipId && visited.has(clipId)) return '<!-- circular clip reference -->'
+    const clipDef = clipId ? project.clips.find(c => c.id === clipId) : undefined
+    if (!clipDef) return '<!-- clip not found -->'
+
+    const nestedVisited = new Set(visited)
+    nestedVisited.add(clipId!)
+    const clipFrame = resolveClipFrame(clipDef, parentLayer, obj.id, parentFrame)
+    const clipObjects = resolveClipObjects(clipDef, clipFrame)
+    const transformAttr = transforms.length > 0 ? ` transform="${transforms.join(' ')}"` : ''
+    const childSvg = clipObjects.map(c => flickObjectToSvg(c, project, clipDef.layers[0] ?? parentLayer, clipFrame, nestedVisited)).join('\n    ')
     return `<g${transformAttr}>\n    ${childSvg}\n  </g>`
   }
 
@@ -101,7 +118,7 @@ export function renderFrameToSvg(project: Project, frame: number): string {
     if (objects.length === 0) continue
     parts.push(`  <g>`)
     for (const obj of objects) {
-      parts.push(`    ${flickObjectToSvg(obj)}`)
+      parts.push(`    ${flickObjectToSvg(obj, project, layer, frame)}`)
     }
     parts.push(`  </g>`)
   }

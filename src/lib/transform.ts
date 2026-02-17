@@ -67,9 +67,9 @@ export function computeRotationAttrs(
   delta = ((delta % 360) + 540) % 360 - 180
   newRotation = oldRotation + delta
 
-  // Object's rotation origin: groups use (x, y), others use bbox center
+  // Object's rotation origin: groups/clips use (x, y), others use bbox center
   let oX: number, oY: number
-  if (type === 'group') {
+  if (type === 'group' || type === 'clip') {
     oX = (attrs.x as number) ?? 0
     oY = (attrs.y as number) ?? 0
   } else {
@@ -285,6 +285,24 @@ export function applyNewBBox(
       const newX = newBBox.x - childrenBBox.x * newScaleX
       const newY = newBBox.y - childrenBBox.y * newScaleY
       return { x: newX, y: newY, scaleX: newScaleX, scaleY: newScaleY }
+    }
+
+    case 'clip': {
+      // Clip scaling works like group: adjust scaleX/scaleY + position
+      const oldSx = (attrs.scaleX as number) ?? 1
+      const oldSy = (attrs.scaleY as number) ?? 1
+      const oldBBox = computeBBox({ id: '', type: 'clip', attrs } as FlickObject)
+      if (!oldBBox || oldBBox.width === 0 || oldBBox.height === 0) {
+        return { x: newBBox.x + newBBox.width / 2, y: newBBox.y + newBBox.height / 2 }
+      }
+      const newScaleX = oldSx * (newBBox.width / oldBBox.width)
+      const newScaleY = oldSy * (newBBox.height / oldBBox.height)
+      return {
+        x: newBBox.x + newBBox.width / 2,
+        y: newBBox.y + newBBox.height / 2,
+        scaleX: newScaleX,
+        scaleY: newScaleY,
+      }
     }
 
     default:

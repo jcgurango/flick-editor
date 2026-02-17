@@ -1,5 +1,18 @@
-import type { FlickObject } from '../types/project'
+import { createContext, useContext } from 'react'
+import type { FlickObject, Project, Layer } from '../types/project'
 import { computeBBox, absoluteOrigin } from '../lib/bbox'
+import { resolveClipFrame, resolveClipObjects } from '../lib/interpolate'
+
+/** Context for resolving clip instances during rendering. */
+export interface ClipRenderContextValue {
+  project: Project
+  parentLayer: Layer
+  parentFrame: number
+  /** Track visited clip IDs to detect circular dependencies. */
+  visitedClipIds?: Set<string>
+}
+
+export const ClipRenderContext = createContext<ClipRenderContextValue | null>(null)
 
 interface SvgObjectProps {
   obj: FlickObject
@@ -11,6 +24,7 @@ interface SvgObjectProps {
 /** Renders a FlickObject as the corresponding SVG element. */
 export function SvgObject({ obj, onClick, onMouseDown, onDoubleClick }: SvgObjectProps) {
   const { type, id } = obj
+  const clipCtx = useContext(ClipRenderContext)
 
   // Extract non-SVG attrs
   const {
@@ -33,18 +47,18 @@ export function SvgObject({ obj, onClick, onMouseDown, onDoubleClick }: SvgObjec
     }
   }
 
-  // For paths and groups, x/y is position (rendered as translate)
+  // For paths, groups, and clips, x/y is position (rendered as translate)
   let svgAttrs: Record<string, unknown> = restAttrs
-  if (type === 'path' || type === 'group') {
-    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, ...otherAttrs } = restAttrs as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number }
+  if (type === 'path' || type === 'group' || type === 'clip') {
+    const { x, y, children: _children, scaleX: _sx, scaleY: _sy, clipId: _cid, setFrame: _sf, ...otherAttrs } = restAttrs as Record<string, unknown> & { x?: number; y?: number; children?: unknown; scaleX?: number; scaleY?: number; clipId?: string; setFrame?: number }
     svgAttrs = otherAttrs
     const px = (x as number) ?? 0
     const py = (y as number) ?? 0
     if (px || py) {
       transforms.push(`translate(${px}, ${py})`)
     }
-    // Group scale (applied innermost — scales children around origin)
-    if (type === 'group') {
+    // Group/clip scale (applied innermost — scales children around origin)
+    if (type === 'group' || type === 'clip') {
       const sx = (obj.attrs.scaleX as number) ?? 1
       const sy = (obj.attrs.scaleY as number) ?? 1
       if (sx !== 1 || sy !== 1) {
@@ -69,6 +83,42 @@ export function SvgObject({ obj, onClick, onMouseDown, onDoubleClick }: SvgObjec
     )
   }
 
+  // Clip rendering — resolve clip contents and render as <g>
+  if (type === 'clip' && clipCtx) {
+    const clipId = obj.attrs.clipId as string | undefined
+    if (!clipId) return null
+
+    // Circular dependency check
+    const visited = clipCtx.visitedClipIds ?? new Set<string>()
+    if (visited.has(clipId)) return null
+
+    const clipDef = clipCtx.project.clips.find(c => c.id === clipId)
+    if (!clipDef) return null
+
+    const clipFrame = resolveClipFrame(clipDef, clipCtx.parentLayer, id, clipCtx.parentFrame)
+    const clipObjects = resolveClipObjects(clipDef, clipFrame)
+
+    // Provide nested context for clips-inside-clips, tracking visited for cycle detection
+    const nestedVisited = new Set(visited)
+    nestedVisited.add(clipId)
+    const nestedCtx: ClipRenderContextValue = {
+      project: clipCtx.project,
+      parentLayer: clipDef.layers[0] ?? clipCtx.parentLayer,
+      parentFrame: clipFrame,
+      visitedClipIds: nestedVisited,
+    }
+
+    return (
+      <ClipRenderContext.Provider value={nestedCtx}>
+        <g data-id={id} transform={transform} {...interactive}>
+          {clipObjects.map(child => (
+            <SvgObject key={child.id} obj={child} />
+          ))}
+        </g>
+      </ClipRenderContext.Provider>
+    )
+  }
+
   const element = (() => {
     switch (type) {
       case 'rect':
@@ -87,6 +137,9 @@ export function SvgObject({ obj, onClick, onMouseDown, onDoubleClick }: SvgObjec
             {svgAttrs.text as string}
           </text>
         )
+      case 'clip':
+        // No clip context available — render nothing
+        return null
       default:
         return null
     }

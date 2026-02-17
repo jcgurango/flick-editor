@@ -34,13 +34,24 @@ export interface Layer {
   keyframes: Keyframe[]
 }
 
-/** Top-level project. */
-export interface Project {
+/** Common base for anything with a multi-layer timeline. */
+export interface Timeline {
   frameRate: number
   width: number
   height: number
   totalFrames: number
   layers: Layer[]
+}
+
+/** A reusable clip definition (instanced sub-project). */
+export interface ClipDefinition extends Timeline {
+  id: string
+  name: string
+}
+
+/** Top-level project. */
+export interface Project extends Timeline {
+  clips: ClipDefinition[]
 }
 
 // ── Frame Selection & Clipboard ──
@@ -87,6 +98,16 @@ export function getGroupChildren(obj: FlickObject): FlickObject[] {
   return (obj.attrs.children as FlickObject[] | undefined) ?? []
 }
 
+// ── Clip Helpers ──
+
+export function isClip(obj: FlickObject): boolean {
+  return obj.type === 'clip'
+}
+
+export function getClipId(obj: FlickObject): string | undefined {
+  return obj.attrs.clipId as string | undefined
+}
+
 // ── Helpers ──
 
 let _nextId = 1
@@ -102,6 +123,7 @@ export function createProject(): Project {
     height: 1080,
     totalFrames: 60,
     layers: [createLayer('Layer 1')],
+    clips: [],
   }
 }
 

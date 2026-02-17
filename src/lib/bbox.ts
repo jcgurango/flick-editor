@@ -9,8 +9,9 @@ export interface BBox {
 
 type Point = [number, number]
 
-/** Compute the axis-aligned bounding box for an object (before rotation). */
-export function computeBBox(obj: FlickObject): BBox | null {
+/** Compute the axis-aligned bounding box for an object (before rotation).
+ *  For clip objects, pass clipDimensions to get accurate sizing. */
+export function computeBBox(obj: FlickObject, clipDimensions?: Map<string, { width: number; height: number }>): BBox | null {
   const a = obj.attrs as Record<string, number>
 
   switch (obj.type) {
@@ -47,6 +48,20 @@ export function computeBBox(obj: FlickObject): BBox | null {
       }
     }
 
+    case 'clip': {
+      const sx = (a.scaleX as number) ?? 1
+      const sy = (a.scaleY as number) ?? 1
+      const clipX = a.x ?? 0
+      const clipY = a.y ?? 0
+      const clipId = obj.attrs.clipId as string | undefined
+      const dims = clipId && clipDimensions?.get(clipId)
+      const baseW = dims ? dims.width : 100
+      const baseH = dims ? dims.height : 100
+      const w = baseW * Math.abs(sx)
+      const h = baseH * Math.abs(sy)
+      return { x: clipX - w / 2, y: clipY - h / 2, width: w, height: h }
+    }
+
     case 'group': {
       const children = (obj.attrs.children as FlickObject[]) ?? []
       if (children.length === 0) return null
@@ -56,7 +71,7 @@ export function computeBBox(obj: FlickObject): BBox | null {
       const sy = (obj.attrs.scaleY as number) ?? 1
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
       for (const child of children) {
-        const childBBox = computeBBox(child)
+        const childBBox = computeBBox(child, clipDimensions)
         if (!childBBox) continue
         // Expand through child's rotation to get its true AABB
         const childRot = (child.attrs.rotation as number) ?? 0
@@ -86,7 +101,7 @@ export function computeBBox(obj: FlickObject): BBox | null {
 /** Compute the rotation/transform origin for an object.
  *  Groups rotate around their (x, y) origin; others around bbox center. */
 export function absoluteOrigin(obj: FlickObject, bbox: BBox): Point {
-  if (obj.type === 'group') {
+  if (obj.type === 'group' || obj.type === 'clip') {
     return [(obj.attrs.x as number) ?? 0, (obj.attrs.y as number) ?? 0]
   }
   return [bbox.x + bbox.width * 0.5, bbox.y + bbox.height * 0.5]

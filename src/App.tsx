@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
-import { useStore } from './store'
+import { useStore, getActiveTimeline } from './store'
 import { getActiveKeyframe, getNextKeyframe, generateId, getSingleSelectedKeyframe, createProject } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
@@ -8,10 +8,11 @@ import { computeBBox, absoluteOrigin, rotatedCorners } from './lib/bbox'
 import type { BBox } from './lib/bbox'
 import type { HandleId, RotateCorner } from './components/BoundingBox'
 import type { FlickObject } from './types/project'
-import { SvgObject } from './components/SvgObject'
+import { SvgObject, ClipRenderContext } from './components/SvgObject'
 import { BoundingBox } from './components/BoundingBox'
 import { Inspector } from './components/Inspector'
 import { Hierarchy } from './components/Hierarchy'
+import { ClipLibrary } from './components/ClipLibrary'
 import { MenuBar } from './components/MenuBar'
 import { CollapsiblePanel } from './components/CollapsiblePanel'
 import { Breadcrumb } from './components/Breadcrumb'
@@ -91,6 +92,11 @@ function App() {
   const reorderLayer = useStore((s) => s.reorderLayer)
   const documentName = useStore((s) => s.documentName)
   const editContext = useStore((s) => s.editContext)
+
+  // Active timeline: project or clip depending on edit context
+  const activeTimeline = useStore((s) => getActiveTimeline(s))
+  const activeLayers = activeTimeline.layers
+  const activeTotalFrames = activeTimeline.totalFrames
 
   // Document title
   useEffect(() => {
@@ -222,6 +228,13 @@ function App() {
           }
           s.setFrameSelection({ layerIds: [layerId], startFrame: s.currentFrame, endFrame: s.currentFrame })
         }
+        return
+      }
+
+      // Create clip (F8)
+      if (e.key === 'F8') {
+        e.preventDefault()
+        useStore.getState().createClipFromSelection()
         return
       }
 
@@ -398,11 +411,19 @@ function App() {
     const rootEntry = editContext[0]
     const layer = project.layers.find((l) => l.id === rootEntry.layerId)
     if (!layer) return null
-    const kf = layer.keyframes.find((k) => k.frame === currentFrame)
+
+    // For the root entry, we need to find the object on a keyframe
+    // Use the saved parent frame for clip contexts, or currentFrame for groups
+    const parentFrame = editContext.some(e => e.type === 'clip')
+      ? (useStore.getState()._savedFrames[0] ?? currentFrame)
+      : currentFrame
+    const kf = layer.keyframes.find((k) => k.frame === parentFrame)
+      ?? getActiveKeyframe(layer, parentFrame)
     if (!kf) return null
 
-    let currentObjs: FlickObject[] = kf.objects
+    let currentObjs: FlickObject[] = resolveFrame(layer, parentFrame, project.totalFrames)
     const transformParts: string[] = []
+    let isClipEdit = false
 
     // Affine matrix [a, b, c, d, tx, ty] for local→canvas mapping
     let ma = 1, mb = 0, mc = 0, md = 1, mtx = 0, mty = 0
@@ -414,13 +435,16 @@ function App() {
     }
 
     for (const entry of editContext) {
-      const group = currentObjs.find((o) => o.id === entry.objectId)
-      if (!group || group.type !== 'group') return null
-      const lx = (group.attrs.x as number) ?? 0
-      const ly = (group.attrs.y as number) ?? 0
-      const lr = (group.attrs.rotation as number) ?? 0
-      const lsx = (group.attrs.scaleX as number) ?? 1
-      const lsy = (group.attrs.scaleY as number) ?? 1
+      const obj = currentObjs.find((o) => o.id === entry.objectId)
+      if (!obj) return null
+
+      if (obj.type !== 'group' && obj.type !== 'clip') return null
+
+      const lx = (obj.attrs.x as number) ?? 0
+      const ly = (obj.attrs.y as number) ?? 0
+      const lr = (obj.attrs.rotation as number) ?? 0
+      const lsx = (obj.attrs.scaleX as number) ?? 1
+      const lsy = (obj.attrs.scaleY as number) ?? 1
 
       // translate(x, y) rotate(rot) scale(sx, sy)
       if (lx || ly) {
@@ -437,11 +461,19 @@ function App() {
         compose(lsx, 0, 0, lsy, 0, 0)
       }
 
-      currentObjs = (group.attrs.children as FlickObject[]) ?? []
+      if (entry.type === 'clip') {
+        // Clip: content is in project.clips, not in attrs.children
+        isClipEdit = true
+        break
+      } else {
+        // Group: descend into children
+        currentObjs = (obj.attrs.children as FlickObject[]) ?? []
+      }
     }
 
     return {
-      children: currentObjs,
+      children: isClipEdit ? null : currentObjs, // null for clip edit (uses activeLayers instead)
+      isClipEdit,
       transformStr: transformParts.join(' '),
       // World position of local origin (0,0)
       groupX: mtx, groupY: mty,
@@ -810,10 +842,11 @@ function App() {
         // Find all objects whose rotated AABB intersects the marquee
         const s = useStore.getState()
         const hits: string[] = []
-        for (const layer of s.project.layers) {
+        const boxSelectLayers = getActiveTimeline(s).layers
+        for (const layer of boxSelectLayers) {
           if (!layer.visible || layer.locked) continue
           if (!layer.keyframes.some((kf) => kf.frame === s.currentFrame)) continue
-          const objects = resolveFrame(layer, s.currentFrame, s.project.totalFrames)
+          const objects = resolveFrame(layer, s.currentFrame, getActiveTimeline(s).totalFrames)
           for (const obj of objects) {
             const bbox = computeBBox(obj)
             if (!bbox) continue
@@ -897,7 +930,7 @@ function App() {
     // Commit drawn shape
     if (isDrawingRef.current && drawPreview) {
       const s = useStore.getState()
-      const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+      const layer = getActiveTimeline(s).layers.find((l) => l.id === s.activeLayerId)
       const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
       if (layer && kf) {
         const a = drawPreview.attrs as Record<string, number>
@@ -935,9 +968,9 @@ function App() {
       const rect = wrapper.getBoundingClientRect()
       const x = ev.clientX - rect.left + wrapper.scrollLeft - 160 // layer column width
       if (x < 0) return null // clicked on layer column
-      return Math.max(1, Math.min(project.totalFrames, Math.floor(x / 16) + 1))
+      return Math.max(1, Math.min(activeTotalFrames, Math.floor(x / 16) + 1))
     },
-    [project.totalFrames],
+    [activeTotalFrames],
   )
 
   /** Compute cell { layerIdx, frame } from mouse event. Returns null if on frame numbers row or layer column. */
@@ -950,10 +983,10 @@ function App() {
       if (y < 0) return null // frame numbers header
       const frame = frameFromX(ev)
       if (!frame) return null // layer column
-      const layerIdx = Math.max(0, Math.min(project.layers.length - 1, Math.floor(y / 28)))
+      const layerIdx = Math.max(0, Math.min(activeLayers.length - 1, Math.floor(y / 28)))
       return { layerIdx, frame }
     },
-    [project.layers.length, frameFromX],
+    [activeLayers.length, frameFromX],
   )
 
   const handleTimelineMouseDown = useCallback(
@@ -981,7 +1014,7 @@ function App() {
       }
 
       // Check if the clicked cell is a keyframe (for potential keyframe drag)
-      const clickedLayer = project.layers[cell.layerIdx]
+      const clickedLayer = activeLayers[cell.layerIdx]
       const isKeyframeCell = clickedLayer?.keyframes.some((k) => k.frame === cell.frame)
 
       // Clear previous selection immediately
@@ -1015,7 +1048,7 @@ function App() {
 
         if (isDraggingKf.current) {
           // Clamp to same layer, update drag target frame
-          const targetFrame = Math.max(1, Math.min(project.totalFrames, end.frame))
+          const targetFrame = Math.max(1, Math.min(activeTotalFrames, end.frame))
           setKfDrag({ layerId: clickedLayer.id, fromFrame: cell.frame, toFrame: targetFrame })
         } else if (isFrameSelectingRef.current) {
           setFrameSelectEnd(end)
@@ -1027,7 +1060,7 @@ function App() {
           // Commit keyframe move
           const drag = kfDragRef.current
           if (drag && drag.fromFrame !== drag.toFrame) {
-            const targetLayer = useStore.getState().project.layers.find(l => l.id === drag.layerId)
+            const targetLayer = getActiveTimeline(useStore.getState()).layers.find(l => l.id === drag.layerId)
             const hasExisting = targetLayer?.keyframes.some(k => k.frame === drag.toFrame)
             if (hasExisting) {
               if (confirm(`A keyframe already exists at frame ${drag.toFrame}. Replace it?`)) {
@@ -1047,7 +1080,7 @@ function App() {
             const maxFrame = Math.max(start.frame, end.frame)
             const minLayer = Math.min(start.layerIdx, end.layerIdx)
             const maxLayer = Math.max(start.layerIdx, end.layerIdx)
-            const layers = useStore.getState().project.layers
+            const layers = getActiveTimeline(useStore.getState()).layers
             const layerIds = layers.slice(minLayer, maxLayer + 1).map(l => l.id)
             useStore.getState().setFrameSelection({ layerIds, startFrame: minFrame, endFrame: maxFrame })
             useStore.getState().setInspectorFocus('timeline')
@@ -1064,7 +1097,7 @@ function App() {
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
     },
-    [cellFromEvent, frameFromX, setCurrentFrame, setActiveLayerId, setFrameSelection, project.layers, project.totalFrames],
+    [cellFromEvent, frameFromX, setCurrentFrame, setActiveLayerId, setFrameSelection, activeLayers, activeTotalFrames],
   )
 
   return (
@@ -1096,7 +1129,43 @@ function App() {
         </div>
 
         {/* Canvas */}
-        <div className="canvas-area" ref={canvasAreaRef}>
+        <div
+          className="canvas-area"
+          ref={canvasAreaRef}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes('application/x-flick-clip')) {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'copy'
+            }
+          }}
+          onDrop={(e) => {
+            const clipId = e.dataTransfer.getData('application/x-flick-clip')
+            if (!clipId) return
+            e.preventDefault()
+            const s = useStore.getState()
+            // Convert drop position to canvas coordinates
+            const rect = canvasAreaRef.current!.getBoundingClientRect()
+            const cx = (e.clientX - rect.left - s.pan.x) / s.zoom
+            const cy = (e.clientY - rect.top - s.pan.y) / s.zoom
+            // Find or create a keyframe on the active layer
+            const activeLyrs = getActiveTimeline(s).layers
+            const layer = activeLyrs.find((l) => l.id === s.activeLayerId)
+            if (!layer || layer.locked) return
+            const hasKf = layer.keyframes.some((k) => k.frame === s.currentFrame)
+            if (!hasKf) {
+              s.insertKeyframe(s.activeLayerId, s.currentFrame)
+            }
+            const instanceId = generateId()
+            const clipInstance = {
+              id: instanceId,
+              type: 'clip' as const,
+              attrs: { x: cx, y: cy, rotation: 0, scaleX: 1, scaleY: 1, clipId },
+            }
+            s.addObjectToKeyframe(s.activeLayerId, s.currentFrame, clipInstance)
+            s.setSelectedObjectIds([instanceId])
+            s.setInspectorFocus('canvas')
+          }}
+        >
           {containerSize.width > 0 && (
             <svg
               width={containerSize.width}
@@ -1136,7 +1205,8 @@ function App() {
                       const objects = resolveFrame(layer, currentFrame, project.totalFrames)
                       const isOnKeyframe = layer.keyframes.some((kf) => kf.frame === currentFrame)
                       return (
-                        <g key={layer.id} data-layer-id={layer.id}>
+                        <ClipRenderContext.Provider key={layer.id} value={{ project, parentLayer: layer, parentFrame: currentFrame }}>
+                        <g data-layer-id={layer.id}>
                           {objects.map((obj) => (
                             <SvgObject
                               key={obj.id}
@@ -1155,9 +1225,16 @@ function App() {
                               } : undefined}
                               onDoubleClick={activeTool === 'select' ? (e) => {
                                 if (!isOnKeyframe || layer.locked) return
-                                if (obj.type !== 'group') return
-                                e.stopPropagation()
-                                useStore.getState().enterGroup(obj.id, layer.id)
+                                if (obj.type === 'group') {
+                                  e.stopPropagation()
+                                  useStore.getState().enterGroup(obj.id, layer.id)
+                                } else if (obj.type === 'clip') {
+                                  const clipId = obj.attrs.clipId as string | undefined
+                                  if (clipId) {
+                                    e.stopPropagation()
+                                    useStore.getState().enterClip(obj.id, layer.id, clipId)
+                                  }
+                                }
                               } : undefined}
                               onMouseDown={activeTool === 'select' ? (e) => {
                                 if (e.button !== 0) return
@@ -1180,25 +1257,48 @@ function App() {
                             />
                           ))}
                         </g>
+                        </ClipRenderContext.Provider>
                       )
                     })}
-                  {/* Edit context mode: dim everything, interactive group children */}
-                  {editTarget && (
+                  {/* Edit context mode: dim everything, interactive group/clip children */}
+                  {editTarget && (() => {
+                    // Resolve the objects to render interactively
+                    // For clip edit, build per-layer groups so each gets proper ClipRenderContext
+                    const editObjects: FlickObject[] = editTarget.isClipEdit
+                      ? activeLayers
+                          .filter((l) => l.visible)
+                          .slice()
+                          .reverse()
+                          .flatMap((l) => resolveFrame(l, currentFrame, activeTotalFrames))
+                      : (editTarget.children ?? [])
+                    // For clip edit: build layer→objects map for context providers
+                    const clipEditLayerObjects: { layer: Layer; objects: FlickObject[] }[] = editTarget.isClipEdit
+                      ? activeLayers
+                          .filter((l) => l.visible)
+                          .slice()
+                          .reverse()
+                          .map((l) => ({ layer: l, objects: resolveFrame(l, currentFrame, activeTotalFrames) }))
+                      : []
+
+                    return (
                     <>
-                      {/* Dimmed background: all layers non-interactive */}
+                      {/* Dimmed background: all project layers non-interactive */}
                       <g opacity={0.3} pointerEvents="none">
                         {project.layers
                           .filter((l) => l.visible)
                           .slice()
                           .reverse()
                           .map((layer) => {
-                            const objects = resolveFrame(layer, currentFrame, project.totalFrames)
+                            const parentFrame = useStore.getState()._savedFrames[0] ?? currentFrame
+                            const objects = resolveFrame(layer, parentFrame, project.totalFrames)
                             return (
-                              <g key={layer.id}>
+                              <ClipRenderContext.Provider key={layer.id} value={{ project, parentLayer: layer, parentFrame }}>
+                              <g>
                                 {objects.map((obj) => (
                                   <SvgObject key={obj.id} obj={obj} />
                                 ))}
                               </g>
+                              </ClipRenderContext.Provider>
                             )
                           })}
                       </g>
@@ -1207,9 +1307,53 @@ function App() {
                         <line x1={-12 / zoom} y1={0} x2={12 / zoom} y2={0} stroke="#ff4488" strokeWidth={1.5 / zoom} />
                         <line x1={0} y1={-12 / zoom} x2={0} y2={12 / zoom} stroke="#ff4488" strokeWidth={1.5 / zoom} />
                       </g>
-                      {/* Interactive group children */}
+                      {/* Interactive children (group children or clip layer objects) */}
                       <g transform={editTarget.transformStr}>
-                        {editTarget.children.map((obj) => (
+                        {editTarget.isClipEdit
+                          ? clipEditLayerObjects.map(({ layer: clipLayer, objects: clipObjs }) => (
+                              <ClipRenderContext.Provider key={clipLayer.id} value={{ project, parentLayer: clipLayer, parentFrame: currentFrame }}>
+                                {clipObjs.map((obj) => (
+                                  <SvgObject
+                                    key={obj.id}
+                                    obj={obj}
+                                    onClick={activeTool === 'select' ? (e) => {
+                                      e.stopPropagation()
+                                      if (e.ctrlKey || e.metaKey) {
+                                        toggleSelectedObjectId(obj.id)
+                                      } else {
+                                        setSelectedObjectIds([obj.id])
+                                      }
+                                      useStore.getState().setInspectorFocus('canvas')
+                                    } : undefined}
+                                    onDoubleClick={activeTool === 'select' ? (e) => {
+                                      if (obj.type === 'group') {
+                                        e.stopPropagation()
+                                        useStore.getState().enterGroup(obj.id, editTarget.layerId)
+                                      } else if (obj.type === 'clip') {
+                                        const clipId = obj.attrs.clipId as string | undefined
+                                        if (clipId) {
+                                          e.stopPropagation()
+                                          useStore.getState().enterClip(obj.id, editTarget.layerId, clipId)
+                                        }
+                                      }
+                                    } : undefined}
+                                    onMouseDown={activeTool === 'select' ? (e) => {
+                                      if (e.button !== 0 || e.shiftKey) return
+                                      if (e.ctrlKey || e.metaKey) return
+                                      e.stopPropagation()
+                                      isDraggingRef.current = true
+                                      dragStartRef.current = { x: e.clientX, y: e.clientY }
+                                      dragObjRef.current = { id: obj.id, layerId: editTarget.layerId, type: obj.type, attrs: { ...obj.attrs } }
+                                      const s = useStore.getState()
+                                      if (!s.selectedObjectIds.includes(obj.id)) {
+                                        setSelectedObjectIds([obj.id])
+                                      }
+                                    } : undefined}
+                                  />
+                                ))}
+                              </ClipRenderContext.Provider>
+                            ))
+                          : editObjects.map((obj) => (
                           <SvgObject
                             key={obj.id}
                             obj={obj}
@@ -1223,19 +1367,24 @@ function App() {
                               useStore.getState().setInspectorFocus('canvas')
                             } : undefined}
                             onDoubleClick={activeTool === 'select' ? (e) => {
-                              if (obj.type !== 'group') return
-                              e.stopPropagation()
-                              useStore.getState().enterGroup(obj.id, editTarget.layerId)
+                              if (obj.type === 'group') {
+                                e.stopPropagation()
+                                useStore.getState().enterGroup(obj.id, editTarget.layerId)
+                              } else if (obj.type === 'clip') {
+                                const clipId = obj.attrs.clipId as string | undefined
+                                if (clipId) {
+                                  e.stopPropagation()
+                                  useStore.getState().enterClip(obj.id, editTarget.layerId, clipId)
+                                }
+                              }
                             } : undefined}
                             onMouseDown={activeTool === 'select' ? (e) => {
                               if (e.button !== 0 || e.shiftKey) return
                               if (e.ctrlKey || e.metaKey) return
-                              const childObj = editTarget.children.find((o) => o.id === obj.id)
-                              if (!childObj) return
                               e.stopPropagation()
                               isDraggingRef.current = true
                               dragStartRef.current = { x: e.clientX, y: e.clientY }
-                              dragObjRef.current = { id: obj.id, layerId: editTarget.layerId, type: childObj.type, attrs: { ...childObj.attrs } }
+                              dragObjRef.current = { id: obj.id, layerId: editTarget.layerId, type: obj.type, attrs: { ...obj.attrs } }
                               const s = useStore.getState()
                               if (!s.selectedObjectIds.includes(obj.id)) {
                                 setSelectedObjectIds([obj.id])
@@ -1245,7 +1394,8 @@ function App() {
                         ))}
                       </g>
                     </>
-                  )}
+                    )
+                  })()}
                 </g>
 
                 {/* Drag preview ghost */}
@@ -1294,11 +1444,13 @@ function App() {
                 {/* Bounding boxes for selected objects */}
                 {activeTool === 'select' && selectedObjectIds.length > 0 && (() => {
                   // In edit context, find objects from the edit target; otherwise from all layers
-                  const allObjects = editTarget
-                    ? editTarget.children
-                    : project.layers
+                  const allObjects: FlickObject[] = editTarget
+                    ? (editTarget.isClipEdit
+                        ? activeLayers.filter((l) => l.visible).flatMap((l) => resolveFrame(l, currentFrame, activeTotalFrames))
+                        : (editTarget.children ?? []))
+                    : activeLayers
                         .filter((l) => l.visible)
-                        .flatMap((l) => resolveFrame(l, currentFrame, project.totalFrames))
+                        .flatMap((l) => resolveFrame(l, currentFrame, activeTotalFrames))
                   const singleSelected = selectedObjectIds.length === 1
                   // Group offset for bounding boxes when in edit context
 
@@ -1321,11 +1473,13 @@ function App() {
                           onHandleMouseDown={singleSelected ? (handle, e) => {
                             if (e.button !== 0) return
                             e.stopPropagation()
-                            // In edit context, use editTarget children; otherwise find from layer
+                            // In edit context, use editTarget children or clip layers; otherwise find from layer
                             const kfObj = editTarget
-                              ? editTarget.children.find((o) => o.id === selId)
+                              ? (editTarget.isClipEdit
+                                  ? allObjects.find((o) => o.id === selId)
+                                  : editTarget.children?.find((o) => o.id === selId))
                               : (() => {
-                                  const layer = project.layers.find((l) => l.id === activeLayerId)
+                                  const layer = activeLayers.find((l) => l.id === activeLayerId)
                                   const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
                                   return kf?.objects.find((o) => o.id === selId)
                                 })()
@@ -1340,9 +1494,11 @@ function App() {
                             if (e.button !== 0) return
                             e.stopPropagation()
                             const kfObj = editTarget
-                              ? editTarget.children.find((o) => o.id === selId)
+                              ? (editTarget.isClipEdit
+                                  ? allObjects.find((o) => o.id === selId)
+                                  : editTarget.children?.find((o) => o.id === selId))
                               : (() => {
-                                  const layer = project.layers.find((l) => l.id === activeLayerId)
+                                  const layer = activeLayers.find((l) => l.id === activeLayerId)
                                   const kf = layer?.keyframes.find((k) => k.frame === currentFrame)
                                   return kf?.objects.find((o) => o.id === selId)
                                 })()
@@ -1412,6 +1568,9 @@ function App() {
             <CollapsiblePanel title="Hierarchy">
               <Hierarchy />
             </CollapsiblePanel>
+            <CollapsiblePanel title="Clip Library">
+              <ClipLibrary />
+            </CollapsiblePanel>
           </div>
         </div>
       </div>
@@ -1430,7 +1589,7 @@ function App() {
           <button className="timeline-btn" title={isPlaying ? 'Pause' : 'Play'} onClick={togglePlayback}>
             {isPlaying ? '⏸' : '▶'}
           </button>
-          <button className="timeline-btn" title="Next Frame" onClick={() => setCurrentFrame(Math.min(project.totalFrames, currentFrame + 1))}>⏭</button>
+          <button className="timeline-btn" title="Next Frame" onClick={() => setCurrentFrame(Math.min(activeTotalFrames, currentFrame + 1))}>⏭</button>
           <div style={{ flex: 1 }} />
           <span className="timeline-frame-display">Frame {currentFrame}</span>
           <button className="timeline-btn" title="Add Keyframe" onClick={() => useStore.getState().insertKeyframe(activeLayerId, currentFrame)}>◆</button>
@@ -1443,21 +1602,21 @@ function App() {
               <span className="timeline-layers-title">Layers</span>
               <div className="timeline-layer-actions">
                 <button
-                  title={project.layers.every((l) => l.visible) ? 'Hide all' : 'Show all'}
-                  onClick={() => setAllLayersVisible(!project.layers.every((l) => l.visible))}
+                  title={activeLayers.every((l) => l.visible) ? 'Hide all' : 'Show all'}
+                  onClick={() => setAllLayersVisible(!activeLayers.every((l) => l.visible))}
                 >
-                  {project.layers.every((l) => l.visible) ? '👁' : '👁‍🗨'}
+                  {activeLayers.every((l) => l.visible) ? '👁' : '👁‍🗨'}
                 </button>
                 <button
-                  title={project.layers.every((l) => l.locked) ? 'Unlock all' : 'Lock all'}
-                  onClick={() => setAllLayersLocked(!project.layers.every((l) => l.locked))}
+                  title={activeLayers.every((l) => l.locked) ? 'Unlock all' : 'Lock all'}
+                  onClick={() => setAllLayersLocked(!activeLayers.every((l) => l.locked))}
                 >
-                  {project.layers.every((l) => l.locked) ? '🔒' : '🔓'}
+                  {activeLayers.every((l) => l.locked) ? '🔒' : '🔓'}
                 </button>
               </div>
             </div>
             <div className="timeline-frame-numbers">
-              {Array.from({ length: project.totalFrames }, (_, i) => (
+              {Array.from({ length: activeTotalFrames }, (_, i) => (
                 <div
                   key={i}
                   className={`timeline-frame-number${(i + 1) % 5 === 0 ? ' fifth' : ''}`}
@@ -1468,7 +1627,7 @@ function App() {
             </div>
           </div>
           {/* Layer rows */}
-          {project.layers.map((layer, layerIdx) => (
+          {activeLayers.map((layer, layerIdx) => (
             <div key={layer.id}>
               {timelineLayerDrag && timelineLayerDropIdx === layerIdx && (
                 <div className="timeline-layer-drop-indicator" />
@@ -1486,10 +1645,10 @@ function App() {
                   if (e.shiftKey) {
                     // Select range from active layer to this one
                     const s = useStore.getState()
-                    const activeIdx = project.layers.findIndex((l) => l.id === s.activeLayerId)
+                    const activeIdx = activeLayers.findIndex((l) => l.id === s.activeLayerId)
                     const minIdx = Math.min(activeIdx, layerIdx)
                     const maxIdx = Math.max(activeIdx, layerIdx)
-                    setSelectedLayerIds(project.layers.slice(minIdx, maxIdx + 1).map((l) => l.id))
+                    setSelectedLayerIds(activeLayers.slice(minIdx, maxIdx + 1).map((l) => l.id))
                   } else if (e.ctrlKey || e.metaKey) {
                     useStore.getState().toggleSelectedLayerId(layer.id)
                   } else {
@@ -1552,7 +1711,7 @@ function App() {
                 </div>
               </div>
               <div className="timeline-frame-row">
-                {Array.from({ length: project.totalFrames }, (_, i) => {
+                {Array.from({ length: activeTotalFrames }, (_, i) => {
                   const frameNum = i + 1
                   const frameType = getFrameType(layer, frameNum)
                   const isSelected =
@@ -1592,7 +1751,7 @@ function App() {
               </div>
             </div>
           ))}
-          {timelineLayerDrag && timelineLayerDropIdx === project.layers.length && (
+          {timelineLayerDrag && timelineLayerDropIdx === activeLayers.length && (
             <div className="timeline-layer-drop-indicator" />
           )}
         </div>

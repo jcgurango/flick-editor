@@ -1,4 +1,4 @@
-import type { TweenType, EaseDirection, FlickObject, Layer } from '../types/project'
+import type { TweenType, EaseDirection, FlickObject, Layer, ClipDefinition } from '../types/project'
 import { getActiveKeyframe, getNextKeyframe } from '../types/project'
 import { interpolatePath } from './path-morph'
 
@@ -218,4 +218,68 @@ export function resolveFrame(layer: Layer, frame: number, totalFrames?: number):
   const easedT = getEasedT(rawT, kfA.tween, kfA.easeDirection)
 
   return interpolateObjects(kfA.objects, kfB.objects, easedT)
+}
+
+// ── Clip Frame Resolution ──
+
+/**
+ * Determine which clip frame to display at a given parent frame.
+ *
+ * Walks backwards through the parent layer's keyframes to find the most recent
+ * "reference point" for this clip instance (by stable id). A keyframe with a
+ * setFrame attr acts as a reset point; otherwise the first appearance defaults
+ * to clip frame 1.
+ */
+export function resolveClipFrame(
+  clip: ClipDefinition,
+  parentLayer: Layer,
+  instanceId: string,
+  parentFrame: number,
+): number {
+  if (clip.totalFrames <= 0) return 1
+
+  // Sort keyframes descending by frame number, walk backwards from parentFrame
+  const sorted = [...parentLayer.keyframes]
+    .filter(kf => kf.frame <= parentFrame)
+    .sort((a, b) => b.frame - a.frame)
+
+  for (const kf of sorted) {
+    // Check if this instance exists in this keyframe (check raw objects, not interpolated)
+    const obj = kf.objects.find(o => o.id === instanceId)
+    if (!obj) continue
+
+    const setFrame = obj.attrs.setFrame as number | undefined
+    if (setFrame != null) {
+      // This keyframe is a reset point
+      const offset = parentFrame - kf.frame
+      return ((setFrame - 1 + offset) % clip.totalFrames) + 1
+    }
+    // No setFrame — keep walking back to find an earlier setFrame or first appearance
+  }
+
+  // Reached the first appearance with no setFrame anywhere — default to frame 1
+  // Find the first appearance frame
+  const firstKf = [...parentLayer.keyframes]
+    .filter(kf => kf.frame <= parentFrame && kf.objects.some(o => o.id === instanceId))
+    .sort((a, b) => a.frame - b.frame)[0]
+
+  if (!firstKf) return 1
+
+  const offset = parentFrame - firstKf.frame
+  return ((offset) % clip.totalFrames) + 1
+}
+
+/**
+ * Resolve the objects to render for a clip at a given clip frame.
+ * Merges all clip layers bottom-up (same order as main canvas rendering).
+ */
+export function resolveClipObjects(clip: ClipDefinition, clipFrame: number): FlickObject[] {
+  const result: FlickObject[] = []
+  // Layers render bottom-up (last layer in array = bottom)
+  const visibleLayers = clip.layers.filter(l => l.visible).slice().reverse()
+  for (const layer of visibleLayers) {
+    const objects = resolveFrame(layer, clipFrame, clip.totalFrames)
+    result.push(...objects)
+  }
+  return result
 }

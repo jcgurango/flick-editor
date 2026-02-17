@@ -68,6 +68,13 @@ export const OBJECT_FIELDS: Record<string, FieldDef[]> = {
     { key: 'scaleX', label: 'Scale X', type: 'number', step: 0.1 },
     { key: 'scaleY', label: 'Scale Y', type: 'number', step: 0.1 },
   ],
+  clip: [
+    ...POSITION_FIELDS,
+    ROTATION_FIELD,
+    { key: 'scaleX', label: 'Scale X', type: 'number', step: 0.1 },
+    { key: 'scaleY', label: 'Scale Y', type: 'number', step: 0.1 },
+    { key: 'setFrame', label: 'Set Frame', type: 'number', min: 1 },
+  ],
 }
 
 export const TYPE_NAMES: Record<string, string> = {
@@ -78,4 +85,5 @@ export const TYPE_NAMES: Record<string, string> = {
   path: 'Path',
   text: 'Text',
   group: 'Group',
+  clip: 'Clip',
 }

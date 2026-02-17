@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '../store'
+import { useStore, getActiveTimeline } from '../store'
 import type { TweenType, EaseDirection } from '../types/project'
 import { getSingleSelectedKeyframe } from '../types/project'
 import { OBJECT_FIELDS, TYPE_NAMES } from '../lib/inspector-schema'
@@ -81,14 +81,41 @@ export function Inspector() {
   const editContext = useStore((s) => s.editContext)
   const updateObjectInEditContext = useStore((s) => s.updateObjectInEditContext)
 
+  // Active timeline (project or clip)
+  const activeTimeline = useStore((s) => getActiveTimeline(s))
+  const activeLayers = activeTimeline.layers
+
   // Find selected object — either in edit context or on the active keyframe
-  const activeLayer = project.layers.find((l) => l.id === activeLayerId)
+  const activeLayer = activeLayers.find((l) => l.id === activeLayerId)
   const activeKf = activeLayer?.keyframes.find((k) => k.frame === currentFrame)
 
   const selectedObj = (() => {
     if (selectedObjectIds.length !== 1) return null
     if (editContext.length > 0) {
-      // Walk edit context to find the innermost group's children
+      // Check if we're in a clip edit context
+      const clipIdx = editContext.findIndex(e => e.type === 'clip')
+      if (clipIdx !== -1) {
+        const groupsAfterClip = editContext.slice(clipIdx + 1)
+        if (groupsAfterClip.length === 0) {
+          // Pure clip edit — object is directly on clip layer
+          return activeKf?.objects.find((o) => o.id === selectedObjectIds[0]) ?? null
+        }
+        // Group inside clip — walk group chain within clip layers
+        const groupRoot = groupsAfterClip[0]
+        const groupLayer = activeLayers.find((l) => l.id === groupRoot.layerId)
+        if (!groupLayer) return null
+        const kf = groupLayer.keyframes.find((k) => k.frame === currentFrame)
+        if (!kf) return null
+        let currentObjs = kf.objects
+        for (const entry of groupsAfterClip) {
+          const grp = currentObjs.find((o) => o.id === entry.objectId)
+          if (grp?.type === 'group') {
+            currentObjs = (grp.attrs.children as import('../types/project').FlickObject[]) ?? []
+          } else return null
+        }
+        return currentObjs.find((o) => o.id === selectedObjectIds[0]) ?? null
+      }
+      // Pure group edit — walk project layers
       const rootEntry = editContext[0]
       const rootLayer = project.layers.find((l) => l.id === rootEntry.layerId)
       if (!rootLayer) return null
@@ -110,7 +137,7 @@ export function Inspector() {
   const singleSel = getSingleSelectedKeyframe(frameSelection)
   const selectedKfData = singleSel
     ? (() => {
-        const layer = project.layers.find((l) => l.id === singleSel.layerId)
+        const layer = activeLayers.find((l) => l.id === singleSel.layerId)
         const kf = layer?.keyframes.find((k) => k.frame === singleSel.frame)
         return kf ? { layer: layer!, kf } : null
       })()
@@ -256,29 +283,43 @@ function NumericInput({ value, onCommit }: { value: number; onCommit: (v: number
 }
 
 function SceneSection() {
-  const project = useStore((s) => s.project)
+  const activeTimeline = useStore((s) => getActiveTimeline(s))
+  const editContext = useStore((s) => s.editContext)
   const setFrameRate = useStore((s) => s.setFrameRate)
   const setProjectDimensions = useStore((s) => s.setProjectDimensions)
   const setTotalFrames = useStore((s) => s.setTotalFrames)
+  const isClipEdit = editContext.some(e => e.type === 'clip')
+
+  if (isClipEdit) {
+    return (
+      <div className="inspector-section">
+        <div className="inspector-section-title">Clip</div>
+        <div className="inspector-row">
+          <span className="inspector-label">Frames</span>
+          <NumericInput value={activeTimeline.totalFrames} onCommit={setTotalFrames} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="inspector-section">
       <div className="inspector-section-title">Scene</div>
       <div className="inspector-row">
         <span className="inspector-label">FPS</span>
-        <NumericInput value={project.frameRate} onCommit={setFrameRate} />
+        <NumericInput value={activeTimeline.frameRate} onCommit={setFrameRate} />
       </div>
       <div className="inspector-row">
         <span className="inspector-label">Width</span>
-        <NumericInput value={project.width} onCommit={(w) => setProjectDimensions(w, project.height)} />
+        <NumericInput value={activeTimeline.width} onCommit={(w) => setProjectDimensions(w, activeTimeline.height)} />
       </div>
       <div className="inspector-row">
         <span className="inspector-label">Height</span>
-        <NumericInput value={project.height} onCommit={(h) => setProjectDimensions(project.width, h)} />
+        <NumericInput value={activeTimeline.height} onCommit={(h) => setProjectDimensions(activeTimeline.width, h)} />
       </div>
       <div className="inspector-row">
         <span className="inspector-label">Frames</span>
-        <NumericInput value={project.totalFrames} onCommit={setTotalFrames} />
+        <NumericInput value={activeTimeline.totalFrames} onCommit={setTotalFrames} />
       </div>
     </div>
   )

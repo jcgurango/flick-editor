@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
-import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard, FrameClipboardLayer, FrameClipboardEntry } from './types/project'
+import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard, FrameClipboardLayer, FrameClipboardEntry, ClipDefinition, Timeline } from './types/project'
 import { recenterPath, dragAttrs, applyNewBBox } from './lib/transform'
 import { computeBBox } from './lib/bbox'
 import { resolveFrame } from './lib/interpolate'
@@ -64,9 +64,16 @@ interface EditorState {
 
   // Edit context (group/clip editing)
   editContext: EditContextEntry[]
+  _savedFrames: number[]
   enterGroup: (objectId: string, layerId: string) => void
+  enterClip: (objectId: string, layerId: string, clipId: string) => void
   exitEditContext: () => void
   exitToStage: () => void
+
+  // Clip actions
+  createClipFromSelection: () => void
+  renameClip: (clipId: string, name: string) => void
+  deleteClipDefinition: (clipId: string) => void
 
   // Viewport
   zoom: number
@@ -221,6 +228,47 @@ function pushUndo(state: EditorState): Partial<EditorState> {
   return { _undoStack: [...stack, state.project], _redoStack: [] }
 }
 
+/** Get the active timeline (project or clip) based on edit context. */
+export function getActiveTimeline(state: EditorState): Timeline {
+  // Find the last clip entry in editContext
+  for (let i = state.editContext.length - 1; i >= 0; i--) {
+    const entry = state.editContext[i]
+    if (entry.type === 'clip' && entry.clipId) {
+      const clip = state.project.clips.find((c: ClipDefinition) => c.id === entry.clipId)
+      if (clip) return clip
+    }
+  }
+  return state.project
+}
+
+/** Get the active layers array based on edit context. */
+function getActiveLayers(state: EditorState): Layer[] {
+  return getActiveTimeline(state).layers
+}
+
+
+/** Update layers in the active timeline (project or clip) and return updated project. */
+export function updateActiveLayers(state: EditorState, updater: (layers: Layer[]) => Layer[]): Project {
+  const clipEntry = findActiveClipEntry(state)
+  if (clipEntry) {
+    return {
+      ...state.project,
+      clips: state.project.clips.map((c: ClipDefinition) =>
+        c.id !== clipEntry.clipId ? c : { ...c, layers: updater(c.layers) },
+      ),
+    }
+  }
+  return { ...state.project, layers: updater(state.project.layers) }
+}
+
+/** Find the active clip entry in edit context (last one), or null. */
+function findActiveClipEntry(state: EditorState): EditContextEntry | null {
+  for (let i = state.editContext.length - 1; i >= 0; i--) {
+    if (state.editContext[i].type === 'clip') return state.editContext[i]
+  }
+  return null
+}
+
 export const useStore = create<EditorState>((set) => ({
   project: initialProject,
   setProject: (project) => set({ project }),
@@ -237,6 +285,7 @@ export const useStore = create<EditorState>((set) => ({
     inspectorFocus: 'canvas' as const,
     isPlaying: false,
     editContext: [],
+    _savedFrames: [],
   }),
   documentName: '',
   setDocumentName: (documentName) => set({ documentName }),
@@ -269,7 +318,7 @@ export const useStore = create<EditorState>((set) => ({
   clipboard: { type: 'objects', layerId: '', objects: [] },
   copySelectedObjects: () => {
     const s = useStore.getState()
-    const layer = s.project.layers.find((l) => l.id === s.activeLayerId)
+    const layer = getActiveLayers(s).find((l) => l.id === s.activeLayerId)
     const kf = layer?.keyframes.find((k) => k.frame === s.currentFrame)
     if (!layer || !kf) return
     const objs = kf.objects.filter((o) => s.selectedObjectIds.includes(o.id))
@@ -279,24 +328,23 @@ export const useStore = create<EditorState>((set) => ({
   pasteObjects: () => {
     const s: EditorState = useStore.getState()
     if (s.clipboard.type !== 'objects' || s.clipboard.objects.length === 0) return
-    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    const activeLyrs = getActiveLayers(s)
+    const layer = activeLyrs.find((l: Layer) => l.id === s.activeLayerId)
     if (!layer) return
 
-    // Auto-create keyframe if none exists at current frame (like F6)
-    let project = s.project
     let kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    let preProject = s.project
     if (!kf) {
       const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(layer, s.currentFrame)))
       kf = { frame: s.currentFrame, objects, tween: 'discrete', easeDirection: 'in-out' }
-      project = {
-        ...project,
-        layers: project.layers.map((l: Layer) =>
+      preProject = updateActiveLayers(s, (layers) =>
+        layers.map((l: Layer) =>
           l.id !== layer.id ? l : {
             ...l,
             keyframes: [...l.keyframes, kf!].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
           },
         ),
-      }
+      )
     }
 
     const sameLayer = s.clipboard.layerId === layer.id
@@ -309,20 +357,20 @@ export const useStore = create<EditorState>((set) => ({
       return clone
     })
 
-    const newProject: Project = {
-      ...project,
-      layers: project.layers.map((l: Layer) =>
-        l.id !== layer.id ? l : {
-          ...l,
-          keyframes: l.keyframes.map((k: Keyframe) =>
-            k.frame !== s.currentFrame ? k : { ...k, objects: [...k.objects, ...pasted] },
-          ),
-        },
-      ),
-    }
+    // Apply paste on top of the pre-project (which may have auto-created keyframe)
+    const preState = { ...s, project: preProject }
     set({
       ...pushUndo(s),
-      project: newProject,
+      project: updateActiveLayers(preState, (layers) =>
+        layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: l.keyframes.map((k: Keyframe) =>
+              k.frame !== s.currentFrame ? k : { ...k, objects: [...k.objects, ...pasted] },
+            ),
+          },
+        ),
+      ),
       selectedObjectIds: pasted.map((o: FlickObject) => o.id),
     })
   },
@@ -332,9 +380,10 @@ export const useStore = create<EditorState>((set) => ({
     const { layerIds, startFrame, endFrame } = s.frameSelection
     const frameCount = endFrame - startFrame + 1
     const clipLayers: FrameClipboardLayer[] = []
+    const activeLyrs = getActiveLayers(s)
 
     for (const layerId of layerIds) {
-      const layer = s.project.layers.find((l: Layer) => l.id === layerId)
+      const layer = activeLyrs.find((l: Layer) => l.id === layerId)
       if (!layer) { clipLayers.push({ frames: {} }); continue }
       const frames: Record<number, FrameClipboardEntry> = {}
       for (let f = startFrame; f <= endFrame; f++) {
@@ -362,20 +411,22 @@ export const useStore = create<EditorState>((set) => ({
     const s: EditorState = useStore.getState()
     if (s.clipboard.type !== 'frames') return
     const { grid } = s.clipboard
-    const activeIdx = s.project.layers.findIndex((l: Layer) => l.id === s.activeLayerId)
+    const activeLyrs = getActiveLayers(s)
+    const activeIdx = activeLyrs.findIndex((l: Layer) => l.id === s.activeLayerId)
     if (activeIdx === -1) return
 
-    let project: Project = JSON.parse(JSON.stringify(s.project))
+    const activeTimelineData = getActiveTimeline(s)
+    let workingLayers: Layer[] = JSON.parse(JSON.stringify(activeLyrs))
 
     for (let li = 0; li < grid.layers.length; li++) {
       const destIdx = activeIdx + li
-      if (destIdx >= project.layers.length) break
-      const destLayer = project.layers[destIdx]
+      if (destIdx >= workingLayers.length) break
+      const destLayer = workingLayers[destIdx]
       const clipLayer = grid.layers[li]
 
       for (let offset = 0; offset < grid.frameCount; offset++) {
         const targetFrame = s.currentFrame + offset
-        if (targetFrame > project.totalFrames) break
+        if (targetFrame > activeTimelineData.totalFrames) break
         const clipEntry = clipLayer.frames[offset]
         if (!clipEntry) continue
 
@@ -410,22 +461,22 @@ export const useStore = create<EditorState>((set) => ({
 
     set({
       ...pushUndo(s),
-      project,
+      project: updateActiveLayers(s, () => workingLayers),
     })
   },
   copyLayers: () => {
     const s = useStore.getState()
     if (s.selectedLayerIds.length === 0) return
     const layerSet = new Set(s.selectedLayerIds)
-    const layers = s.project.layers.filter((l: Layer) => layerSet.has(l.id))
+    const layers = getActiveLayers(s).filter((l: Layer) => layerSet.has(l.id))
     set({ clipboard: { type: 'layers', layers: JSON.parse(JSON.stringify(layers)) } })
   },
   pasteLayers: () => {
     const s: EditorState = useStore.getState()
     if (s.clipboard.type !== 'layers') return
-    const activeIdx = s.project.layers.findIndex((l: Layer) => l.id === s.activeLayerId)
+    const activeLyrs = getActiveLayers(s)
+    const activeIdx = activeLyrs.findIndex((l: Layer) => l.id === s.activeLayerId)
     if (activeIdx === -1) return
-    // Deep clone and regenerate all IDs
     const newLayers: Layer[] = s.clipboard.layers.map((layer: Layer) => {
       const idRemap = new Map<string, string>()
       const newLayer: Layer = JSON.parse(JSON.stringify(layer))
@@ -439,11 +490,13 @@ export const useStore = create<EditorState>((set) => ({
       }
       return newLayer
     })
-    const layers = [...s.project.layers]
-    layers.splice(activeIdx + 1, 0, ...newLayers)
     set({
       ...pushUndo(s),
-      project: { ...s.project, layers },
+      project: updateActiveLayers(s, (layers) => {
+        const result = [...layers]
+        result.splice(activeIdx + 1, 0, ...newLayers)
+        return result
+      }),
       activeLayerId: newLayers[0].id,
       selectedLayerIds: newLayers.map((l: Layer) => l.id),
     })
@@ -459,8 +512,9 @@ export const useStore = create<EditorState>((set) => ({
       if (state._playRafId !== null) cancelAnimationFrame(state._playRafId)
       set({ isPlaying: false, _playRafId: null })
     } else {
-      const frameDuration = 1000 / state.project.frameRate
-      const maxFrame = state.project.totalFrames
+      const timeline = getActiveTimeline(state)
+      const frameDuration = 1000 / timeline.frameRate
+      const maxFrame = timeline.totalFrames
       const startTime = Date.now()
       const startFrame = state.currentFrame
 
@@ -512,24 +566,68 @@ export const useStore = create<EditorState>((set) => ({
 
   // Edit context
   editContext: [],
+  _savedFrames: [],
   enterGroup: (objectId, layerId) =>
     set((state) => ({
       editContext: [...state.editContext, { type: 'group' as const, objectId, layerId }],
       selectedObjectIds: [],
       inspectorFocus: 'canvas' as const,
     })),
+  enterClip: (objectId, layerId, clipId) =>
+    set((state) => {
+      const clip = state.project.clips.find((c: ClipDefinition) => c.id === clipId)
+      if (!clip) return state
+      return {
+        editContext: [...state.editContext, { type: 'clip' as const, objectId, layerId, clipId }],
+        _savedFrames: [...state._savedFrames, state.currentFrame],
+        currentFrame: 1,
+        activeLayerId: clip.layers[0]?.id ?? '',
+        selectedLayerIds: clip.layers[0] ? [clip.layers[0].id] : [],
+        selectedObjectIds: [],
+        frameSelection: null,
+        inspectorFocus: 'canvas' as const,
+      }
+    }),
   exitEditContext: () =>
+    set((state) => {
+      const popped = state.editContext[state.editContext.length - 1]
+      const isClip = popped?.type === 'clip'
+      const restoredFrame = isClip && state._savedFrames.length > 0
+        ? state._savedFrames[state._savedFrames.length - 1]
+        : state.currentFrame
+      // When exiting a clip, restore parent frame and activeLayerId
+      const parentCtx = state.editContext.length >= 2 ? state.editContext[state.editContext.length - 2] : null
+      let activeLayerId = state.activeLayerId
+      if (isClip) {
+        if (parentCtx?.type === 'clip') {
+          const parentClip = state.project.clips.find((c: ClipDefinition) => c.id === parentCtx.clipId)
+          activeLayerId = parentClip?.layers[0]?.id ?? state.project.layers[0]?.id ?? ''
+        } else {
+          activeLayerId = popped.layerId
+        }
+      }
+      return {
+        editContext: state.editContext.slice(0, -1),
+        _savedFrames: isClip ? state._savedFrames.slice(0, -1) : state._savedFrames,
+        currentFrame: restoredFrame,
+        activeLayerId,
+        selectedLayerIds: [activeLayerId],
+        selectedObjectIds: [],
+        frameSelection: null,
+        inspectorFocus: 'canvas' as const,
+      }
+    }),
+  exitToStage: () =>
     set((state) => ({
-      editContext: state.editContext.slice(0, -1),
+      editContext: [],
+      _savedFrames: [],
+      currentFrame: state._savedFrames.length > 0 ? state._savedFrames[0] : state.currentFrame,
+      activeLayerId: state.project.layers[0]?.id ?? '',
+      selectedLayerIds: state.project.layers[0] ? [state.project.layers[0].id] : [],
       selectedObjectIds: [],
+      frameSelection: null,
       inspectorFocus: 'canvas' as const,
     })),
-  exitToStage: () =>
-    set({
-      editContext: [],
-      selectedObjectIds: [],
-      inspectorFocus: 'canvas' as const,
-    }),
 
   zoom: 1,
   setZoom: (zoom) => set({ zoom }),
@@ -568,204 +666,202 @@ export const useStore = create<EditorState>((set) => ({
   setKeyframeTween: (layerId, frame, tween) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId
-            ? layer
-            : {
-                ...layer,
-                keyframes: layer.keyframes.map((kf) =>
-                  kf.frame !== frame ? kf : { ...kf, tween },
-                ),
-              },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) =>
+          layer.id !== layerId ? layer : {
+            ...layer,
+            keyframes: layer.keyframes.map((kf) => kf.frame !== frame ? kf : { ...kf, tween }),
+          },
         ),
-      },
+      ),
     })),
 
   setKeyframeEaseDirection: (layerId, frame, easeDirection) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId
-            ? layer
-            : {
-                ...layer,
-                keyframes: layer.keyframes.map((kf) =>
-                  kf.frame !== frame ? kf : { ...kf, easeDirection },
-                ),
-              },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) =>
+          layer.id !== layerId ? layer : {
+            ...layer,
+            keyframes: layer.keyframes.map((kf) => kf.frame !== frame ? kf : { ...kf, easeDirection }),
+          },
         ),
-      },
+      ),
     })),
 
   updateObjectAttrs: (layerId, frame, objectId, attrs) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId
-            ? layer
-            : {
-                ...layer,
-                keyframes: layer.keyframes.map((kf) =>
-                  kf.frame !== frame
-                    ? kf
-                    : {
-                        ...kf,
-                        objects: kf.objects.map((obj) =>
-                          obj.id !== objectId
-                            ? obj
-                            : { ...obj, attrs: { ...obj.attrs, ...attrs } },
-                        ),
-                      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) =>
+          layer.id !== layerId ? layer : {
+            ...layer,
+            keyframes: layer.keyframes.map((kf) =>
+              kf.frame !== frame ? kf : {
+                ...kf,
+                objects: kf.objects.map((obj) =>
+                  obj.id !== objectId ? obj : { ...obj, attrs: { ...obj.attrs, ...attrs } },
                 ),
               },
+            ),
+          },
         ),
-      },
+      ),
     })),
 
   addObjectToKeyframe: (layerId, frame, object) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId
-            ? layer
-            : {
-                ...layer,
-                keyframes: layer.keyframes.map((kf) =>
-                  kf.frame !== frame
-                    ? kf
-                    : { ...kf, objects: [...kf.objects, object] },
-                ),
-              },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) =>
+          layer.id !== layerId ? layer : {
+            ...layer,
+            keyframes: layer.keyframes.map((kf) =>
+              kf.frame !== frame ? kf : { ...kf, objects: [...kf.objects, object] },
+            ),
+          },
         ),
-      },
+      ),
     })),
 
   setFrameRate: (fps) =>
-    set((state) => ({
-      ...pushUndo(state),
-      project: { ...state.project, frameRate: fps },
-    })),
+    set((state) => {
+      const clipEntry = findActiveClipEntry(state)
+      if (clipEntry) {
+        return {
+          ...pushUndo(state),
+          project: {
+            ...state.project,
+            clips: state.project.clips.map((c: ClipDefinition) =>
+              c.id !== clipEntry.clipId ? c : { ...c, frameRate: fps },
+            ),
+          },
+        }
+      }
+      return { ...pushUndo(state), project: { ...state.project, frameRate: fps } }
+    }),
 
   setProjectDimensions: (width, height) =>
-    set((state) => ({
-      ...pushUndo(state),
-      project: { ...state.project, width, height },
-    })),
+    set((state) => {
+      const clipEntry = findActiveClipEntry(state)
+      if (clipEntry) {
+        return {
+          ...pushUndo(state),
+          project: {
+            ...state.project,
+            clips: state.project.clips.map((c: ClipDefinition) =>
+              c.id !== clipEntry.clipId ? c : { ...c, width, height },
+            ),
+          },
+        }
+      }
+      return { ...pushUndo(state), project: { ...state.project, width, height } }
+    }),
 
   setTotalFrames: (totalFrames) =>
-    set((state) => ({
-      ...pushUndo(state),
-      project: { ...state.project, totalFrames },
-    })),
+    set((state) => {
+      const clipEntry = findActiveClipEntry(state)
+      if (clipEntry) {
+        return {
+          ...pushUndo(state),
+          project: {
+            ...state.project,
+            clips: state.project.clips.map((c: ClipDefinition) =>
+              c.id !== clipEntry.clipId ? c : { ...c, totalFrames },
+            ),
+          },
+        }
+      }
+      return {
+        ...pushUndo(state),
+        project: { ...state.project, totalFrames },
+      }
+    }),
 
   renameLayer: (layerId, name) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId ? layer : { ...layer, name },
-        ),
-      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) => layer.id !== layerId ? layer : { ...layer, name }),
+      ),
     })),
 
   toggleLayerVisibility: (layerId) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId ? layer : { ...layer, visible: !layer.visible },
-        ),
-      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) => layer.id !== layerId ? layer : { ...layer, visible: !layer.visible }),
+      ),
     })),
 
   toggleLayerLocked: (layerId) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId ? layer : { ...layer, locked: !layer.locked },
-        ),
-      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) => layer.id !== layerId ? layer : { ...layer, locked: !layer.locked }),
+      ),
     })),
 
   setAllLayersVisible: (visible) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) => ({ ...layer, visible })),
-      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) => ({ ...layer, visible })),
+      ),
     })),
 
   setAllLayersLocked: (locked) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) => ({ ...layer, locked })),
-      },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) => ({ ...layer, locked })),
+      ),
     })),
 
   insertKeyframe: (layerId, frame) =>
     set((state) => {
-      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      const layer = getActiveLayers(state).find((l: Layer) => l.id === layerId)
       if (!layer) return state
-      // Don't insert if a keyframe already exists at this frame
       if (layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
-      // Resolve the interpolated objects at this frame
       const objects: FlickObject[] = JSON.parse(JSON.stringify(resolveFrame(layer, frame)))
       const newKf: Keyframe = { frame, objects, tween: 'discrete', easeDirection: 'in-out' }
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) =>
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) =>
             l.id !== layerId ? l : {
               ...l,
               keyframes: [...l.keyframes, newKf].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
             },
           ),
-        },
+        ),
       }
     }),
 
   insertBlankKeyframe: (layerId, frame) =>
     set((state) => {
-      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      const layer = getActiveLayers(state).find((l: Layer) => l.id === layerId)
       if (!layer) return state
       if (layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
       const newKf: Keyframe = { frame, objects: [], tween: 'discrete', easeDirection: 'in-out' }
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) =>
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) =>
             l.id !== layerId ? l : {
               ...l,
               keyframes: [...l.keyframes, newKf].sort((a: Keyframe, b: Keyframe) => a.frame - b.frame),
             },
           ),
-        },
+        ),
       }
     }),
 
   reorderObject: (layerId, objectId, newIndex) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((l: Layer) =>
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((l: Layer) =>
           l.id !== layerId ? l : {
             ...l,
             keyframes: l.keyframes.map((kf: Keyframe) => {
@@ -779,16 +875,16 @@ export const useStore = create<EditorState>((set) => ({
             }),
           },
         ),
-      },
+      ),
     })),
 
   moveObjectToLayer: (objectId, fromLayerId, toLayerId, insertIndex) =>
     set((state) => {
       if (fromLayerId === toLayerId) return state
-      const fromLayer = state.project.layers.find((l: Layer) => l.id === fromLayerId)
+      const activeLayers = getActiveLayers(state)
+      const fromLayer = activeLayers.find((l: Layer) => l.id === fromLayerId)
       if (!fromLayer) return state
 
-      // Collect object versions from each keyframe on source layer
       const objByFrame = new Map<number, FlickObject>()
       for (const kf of fromLayer.keyframes) {
         const obj = kf.objects.find((o: FlickObject) => o.id === objectId)
@@ -796,14 +892,12 @@ export const useStore = create<EditorState>((set) => ({
       }
       if (objByFrame.size === 0) return state
 
-      // Fallback object for frames where source didn't have this object
       const fallbackObj = objByFrame.values().next().value!
 
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) => {
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) => {
             if (l.id === fromLayerId) {
               return {
                 ...l,
@@ -826,25 +920,27 @@ export const useStore = create<EditorState>((set) => ({
             }
             return l
           }),
-        },
+        ),
       }
     }),
 
   addLayer: () =>
     set((state) => {
-      const activeIdx = state.project.layers.findIndex((l: Layer) => l.id === state.activeLayerId)
-      const insertAt = activeIdx === -1 ? state.project.layers.length : activeIdx + 1
-      // Generate unique name
-      const existingNames = new Set(state.project.layers.map((l: Layer) => l.name))
+      const activeLyrs = getActiveLayers(state)
+      const activeIdx = activeLyrs.findIndex((l: Layer) => l.id === state.activeLayerId)
+      const insertAt = activeIdx === -1 ? activeLyrs.length : activeIdx + 1
+      const existingNames = new Set(activeLyrs.map((l: Layer) => l.name))
       let name = 'Layer'
       let n = 1
       while (existingNames.has(name)) { n++; name = `Layer ${n}` }
       const newLayer = createLayer(name)
-      const layers = [...state.project.layers]
-      layers.splice(insertAt, 0, newLayer)
       return {
         ...pushUndo(state),
-        project: { ...state.project, layers },
+        project: updateActiveLayers(state, (layers) => {
+          const result = [...layers]
+          result.splice(insertAt, 0, newLayer)
+          return result
+        }),
         activeLayerId: newLayer.id,
         selectedLayerIds: [newLayer.id],
       }
@@ -852,97 +948,90 @@ export const useStore = create<EditorState>((set) => ({
 
   reorderLayer: (layerId, newIndex) =>
     set((state) => {
-      const idx = state.project.layers.findIndex((l: Layer) => l.id === layerId)
+      const activeLyrs = getActiveLayers(state)
+      const idx = activeLyrs.findIndex((l: Layer) => l.id === layerId)
       if (idx === -1 || idx === newIndex) return state
-      const layers = [...state.project.layers]
-      const [layer] = layers.splice(idx, 1)
-      // Adjust: removing source shifts indices above it down by 1
-      const adjustedIndex = idx < newIndex ? newIndex - 1 : newIndex
-      const insertAt = Math.min(adjustedIndex, layers.length)
-      layers.splice(insertAt, 0, layer)
       return {
         ...pushUndo(state),
-        project: { ...state.project, layers },
+        project: updateActiveLayers(state, (layers) => {
+          const result = [...layers]
+          const [layer] = result.splice(idx, 1)
+          const adjustedIndex = idx < newIndex ? newIndex - 1 : newIndex
+          const insertIdx = Math.min(adjustedIndex, result.length)
+          result.splice(insertIdx, 0, layer)
+          return result
+        }),
       }
     }),
 
   reorderLayers: (layerIds, newIndex) =>
     set((state) => {
       const idSet = new Set(layerIds)
-      // Count how many selected layers sit above the target index
-      const aboveCount = state.project.layers.filter(
-        (l: Layer, i: number) => idSet.has(l.id) && i < newIndex,
-      ).length
-      const remaining = state.project.layers.filter((l: Layer) => !idSet.has(l.id))
-      // Preserve order of selected layers as they appear in the project
-      const moving = state.project.layers.filter((l: Layer) => idSet.has(l.id))
-      const insertAt = Math.min(newIndex - aboveCount, remaining.length)
-      const layers = [...remaining]
-      layers.splice(insertAt, 0, ...moving)
       return {
         ...pushUndo(state),
-        project: { ...state.project, layers },
+        project: updateActiveLayers(state, (layers) => {
+          const aboveCount = layers.filter(
+            (l: Layer, i: number) => idSet.has(l.id) && i < newIndex,
+          ).length
+          const remaining = layers.filter((l: Layer) => !idSet.has(l.id))
+          const moving = layers.filter((l: Layer) => idSet.has(l.id))
+          const insertAt = Math.min(newIndex - aboveCount, remaining.length)
+          const result = [...remaining]
+          result.splice(insertAt, 0, ...moving)
+          return result
+        }),
       }
     }),
 
   setKeyframeLoop: (layerId, frame, loop) =>
     set((state) => ({
       ...pushUndo(state),
-      project: {
-        ...state.project,
-        layers: state.project.layers.map((layer) =>
-          layer.id !== layerId
-            ? layer
-            : {
-                ...layer,
-                keyframes: layer.keyframes.map((kf) =>
-                  kf.frame !== frame ? kf : { ...kf, loop },
-                ),
-              },
+      project: updateActiveLayers(state, (layers) =>
+        layers.map((layer) =>
+          layer.id !== layerId ? layer : {
+            ...layer,
+            keyframes: layer.keyframes.map((kf) => kf.frame !== frame ? kf : { ...kf, loop }),
+          },
         ),
-      },
+      ),
     })),
 
   moveKeyframe: (layerId, fromFrame, toFrame) =>
     set((state) => {
       if (fromFrame === toFrame) return state
-      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      const layer = getActiveLayers(state).find((l: Layer) => l.id === layerId)
       if (!layer) return state
       const kfIdx = layer.keyframes.findIndex((k: Keyframe) => k.frame === fromFrame)
       if (kfIdx === -1) return state
       const existingIdx = layer.keyframes.findIndex((k: Keyframe) => k.frame === toFrame)
       const newKeyframes = [...layer.keyframes]
-      // Remove existing keyframe at target if present
       if (existingIdx !== -1) {
         newKeyframes.splice(existingIdx, 1)
       }
-      // Update the moved keyframe's frame number (re-find index since splice may have shifted it)
       const movedIdx = newKeyframes.findIndex((k: Keyframe) => k.frame === fromFrame)
       newKeyframes[movedIdx] = { ...newKeyframes[movedIdx], frame: toFrame }
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) =>
-            l.id !== layerId ? l : { ...l, keyframes: newKeyframes },
-          ),
-        },
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) => l.id !== layerId ? l : { ...l, keyframes: newKeyframes }),
+        ),
       }
     }),
 
   deleteSelectedObjects: () => {
     const s: EditorState = useStore.getState()
     if (s.selectedObjectIds.length === 0) return
-    const kfs = s.project
-      .layers
+    const activeLyrs = getActiveLayers(s)
+    const kfs = activeLyrs
       .map(l => l.keyframes.find((k: Keyframe) => k.frame === s.currentFrame))
       .filter(Boolean)
 
     if (!kfs.length) return
     const idsToDelete = new Set(s.selectedObjectIds)
-    const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) => ({
+    set({
+      ...pushUndo(s),
+      project: updateActiveLayers(s, (layers) =>
+        layers.map((l: Layer) => ({
           ...l,
           keyframes: l.keyframes.map((k: Keyframe) =>
             !kfs.includes(k) ? k : {
@@ -950,32 +1039,27 @@ export const useStore = create<EditorState>((set) => ({
               objects: k.objects.filter((o: FlickObject) => !idsToDelete.has(o.id)),
             },
           ),
-        }),
+        })),
       ),
-    }
-    set({
-      ...pushUndo(s),
-      project: newProject,
       selectedObjectIds: [],
     })
   },
 
   deleteKeyframe: (layerId, frame) =>
     set((state) => {
-      const layer = state.project.layers.find((l: Layer) => l.id === layerId)
+      const layer = getActiveLayers(state).find((l: Layer) => l.id === layerId)
       if (!layer) return state
       if (!layer.keyframes.some((kf: Keyframe) => kf.frame === frame)) return state
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) =>
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) =>
             l.id !== layerId ? l : {
               ...l,
               keyframes: l.keyframes.filter((kf: Keyframe) => kf.frame !== frame),
             },
           ),
-        },
+        ),
         frameSelection: null,
       }
     }),
@@ -987,9 +1071,8 @@ export const useStore = create<EditorState>((set) => ({
       const layerSet = new Set(layerIds)
       return {
         ...pushUndo(state),
-        project: {
-          ...state.project,
-          layers: state.project.layers.map((l: Layer) =>
+        project: updateActiveLayers(state, (layers) =>
+          layers.map((l: Layer) =>
             !layerSet.has(l.id) ? l : {
               ...l,
               keyframes: l.keyframes.filter((kf: Keyframe) =>
@@ -997,21 +1080,22 @@ export const useStore = create<EditorState>((set) => ({
               ),
             },
           ),
-        },
+        ),
         frameSelection: null,
       }
     }),
 
   deleteLayer: (layerId) =>
     set((state) => {
-      if (state.project.layers.length <= 1) return state
-      const layers = state.project.layers.filter((l: Layer) => l.id !== layerId)
-      const newActiveId = state.activeLayerId === layerId ? layers[0].id : state.activeLayerId
+      const activeLyrs = getActiveLayers(state)
+      if (activeLyrs.length <= 1) return state
       return {
         ...pushUndo(state),
-        project: { ...state.project, layers },
-        activeLayerId: newActiveId,
-        selectedLayerIds: [newActiveId],
+        project: updateActiveLayers(state, (layers) =>
+          layers.filter((l: Layer) => l.id !== layerId),
+        ),
+        activeLayerId: state.activeLayerId === layerId ? activeLyrs.find((l: Layer) => l.id !== layerId)!.id : state.activeLayerId,
+        selectedLayerIds: [state.activeLayerId === layerId ? activeLyrs.find((l: Layer) => l.id !== layerId)!.id : state.activeLayerId],
         frameSelection: null,
         selectedObjectIds: [],
       }
@@ -1020,12 +1104,15 @@ export const useStore = create<EditorState>((set) => ({
   deleteSelectedLayers: () =>
     set((state) => {
       const idSet = new Set(state.selectedLayerIds)
-      const remaining = state.project.layers.filter((l: Layer) => !idSet.has(l.id))
-      if (remaining.length === 0) return state // don't delete all layers
+      const activeLyrs = getActiveLayers(state)
+      const remaining = activeLyrs.filter((l: Layer) => !idSet.has(l.id))
+      if (remaining.length === 0) return state
       const newActiveId = idSet.has(state.activeLayerId) ? remaining[0].id : state.activeLayerId
       return {
         ...pushUndo(state),
-        project: { ...state.project, layers: remaining },
+        project: updateActiveLayers(state, (layers) =>
+          layers.filter((l: Layer) => !idSet.has(l.id)),
+        ),
         activeLayerId: newActiveId,
         selectedLayerIds: [newActiveId],
         frameSelection: null,
@@ -1036,7 +1123,7 @@ export const useStore = create<EditorState>((set) => ({
   groupSelectedObjects: () => {
     const s: EditorState = useStore.getState()
     if (s.selectedObjectIds.length < 2) return
-    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    const layer = getActiveLayers(s).find((l: Layer) => l.id === s.activeLayerId)
     if (!layer) return
     const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
     if (!kf) return
@@ -1079,20 +1166,18 @@ export const useStore = create<EditorState>((set) => ({
     const newObjects = [...remaining]
     newObjects.splice(Math.min(firstSelectedIdx, newObjects.length), 0, groupObj)
 
-    const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) =>
-        l.id !== layer.id ? l : {
-          ...l,
-          keyframes: l.keyframes.map((k: Keyframe) =>
-            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
-          ),
-        },
-      ),
-    }
     set({
       ...pushUndo(s),
-      project: newProject,
+      project: updateActiveLayers(s, (layers) =>
+        layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: l.keyframes.map((k: Keyframe) =>
+              k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+            ),
+          },
+        ),
+      ),
       selectedObjectIds: [groupId],
     })
   },
@@ -1101,48 +1186,111 @@ export const useStore = create<EditorState>((set) => ({
     const s: EditorState = useStore.getState()
     if (s.editContext.length === 0) return
 
-    // Walk the edit context to find the group chain
     const ctx = s.editContext
+
+    // Find the first clip entry — everything after it is groups within the clip
+    const clipIdx = ctx.findIndex(e => e.type === 'clip')
+    if (clipIdx !== -1) {
+      // Clip edit context: groups after the clip entry are within clip layers
+      const groupsAfterClip = ctx.slice(clipIdx + 1)
+      if (groupsAfterClip.length === 0) {
+        // Pure clip edit — just update via updateActiveLayers (object is directly on clip layer)
+        set({
+          ...pushUndo(s),
+          project: updateActiveLayers(s, (layers) =>
+            layers.map((l: Layer) => ({
+              ...l,
+              keyframes: l.keyframes.map((kf: Keyframe) =>
+                kf.frame !== s.currentFrame ? kf : {
+                  ...kf,
+                  objects: kf.objects.map((obj: FlickObject) =>
+                    obj.id !== objectId ? obj : { ...obj, attrs: { ...obj.attrs, ...attrs } },
+                  ),
+                },
+              ),
+            })),
+          ),
+        })
+        return
+      }
+      // Group inside clip: navigate clip's layers → group chain
+      const clipLayers = getActiveLayers(s)
+      const groupRoot = groupsAfterClip[0]
+      const groupLayer = clipLayers.find((l: Layer) => l.id === groupRoot.layerId)
+      if (!groupLayer) return
+      const kf = groupLayer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+      if (!kf) return
+
+      function updateInGroupChain(objects: FlickObject[], depth: number): FlickObject[] {
+        const targetId = groupsAfterClip[depth].objectId
+        return objects.map((obj: FlickObject) => {
+          if (obj.id !== targetId) return obj
+          if (depth === groupsAfterClip.length - 1) {
+            const children = (obj.attrs.children as FlickObject[]) ?? []
+            const newChildren = children.map((child: FlickObject) =>
+              child.id !== objectId ? child : { ...child, attrs: { ...child.attrs, ...attrs } },
+            )
+            return { ...obj, attrs: { ...obj.attrs, children: newChildren } }
+          }
+          const children = (obj.attrs.children as FlickObject[]) ?? []
+          return { ...obj, attrs: { ...obj.attrs, children: updateInGroupChain(children, depth + 1) } }
+        })
+      }
+
+      const newObjects = updateInGroupChain(kf.objects, 0)
+      set({
+        ...pushUndo(s),
+        project: updateActiveLayers(s, (layers) =>
+          layers.map((l: Layer) =>
+            l.id !== groupLayer.id ? l : {
+              ...l,
+              keyframes: l.keyframes.map((k: Keyframe) =>
+                k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+              ),
+            },
+          ),
+        ),
+      })
+      return
+    }
+
+    // Pure group edit context (no clips): navigate project.layers
     const rootEntry = ctx[0]
     const layer = s.project.layers.find((l: Layer) => l.id === rootEntry.layerId)
     if (!layer) return
     const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
     if (!kf) return
 
-    // Helper: recursively update object deep in group chain
     function updateInObjects(objects: FlickObject[], depth: number): FlickObject[] {
       const targetId = ctx[depth].objectId
       return objects.map((obj: FlickObject) => {
         if (obj.id !== targetId) return obj
         if (depth === ctx.length - 1) {
-          // We're at the innermost group — update the target child
           const children = (obj.attrs.children as FlickObject[]) ?? []
           const newChildren = children.map((child: FlickObject) =>
             child.id !== objectId ? child : { ...child, attrs: { ...child.attrs, ...attrs } },
           )
           return { ...obj, attrs: { ...obj.attrs, children: newChildren } }
         }
-        // Recurse deeper
         const children = (obj.attrs.children as FlickObject[]) ?? []
         return { ...obj, attrs: { ...obj.attrs, children: updateInObjects(children, depth + 1) } }
       })
     }
 
     const newObjects = updateInObjects(kf.objects, 0)
-    const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) =>
-        l.id !== layer.id ? l : {
-          ...l,
-          keyframes: l.keyframes.map((k: Keyframe) =>
-            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
-          ),
-        },
-      ),
-    }
     set({
       ...pushUndo(s),
-      project: newProject,
+      project: {
+        ...s.project,
+        layers: s.project.layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: l.keyframes.map((k: Keyframe) =>
+              k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+            ),
+          },
+        ),
+      },
     })
   },
 
@@ -1151,13 +1299,76 @@ export const useStore = create<EditorState>((set) => ({
     if (s.editContext.length === 0 || objectIds.length === 0) return
 
     const ctx = s.editContext
+    const idsToDelete = new Set(objectIds)
+
+    // Find the first clip entry
+    const clipIdx = ctx.findIndex(e => e.type === 'clip')
+    if (clipIdx !== -1) {
+      const groupsAfterClip = ctx.slice(clipIdx + 1)
+      if (groupsAfterClip.length === 0) {
+        // Pure clip edit — delete from clip layers directly
+        set({
+          ...pushUndo(s),
+          project: updateActiveLayers(s, (layers) =>
+            layers.map((l: Layer) => ({
+              ...l,
+              keyframes: l.keyframes.map((kf: Keyframe) =>
+                kf.frame !== s.currentFrame ? kf : {
+                  ...kf,
+                  objects: kf.objects.filter((obj: FlickObject) => !idsToDelete.has(obj.id)),
+                },
+              ),
+            })),
+          ),
+          selectedObjectIds: [],
+        })
+        return
+      }
+      // Group inside clip
+      const clipLayers = getActiveLayers(s)
+      const groupRoot = groupsAfterClip[0]
+      const groupLayer = clipLayers.find((l: Layer) => l.id === groupRoot.layerId)
+      if (!groupLayer) return
+      const kf = groupLayer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+      if (!kf) return
+
+      function removeFromGroupChain(objects: FlickObject[], depth: number): FlickObject[] {
+        const targetId = groupsAfterClip[depth].objectId
+        return objects.map((obj: FlickObject) => {
+          if (obj.id !== targetId) return obj
+          if (depth === groupsAfterClip.length - 1) {
+            const children = (obj.attrs.children as FlickObject[]) ?? []
+            return { ...obj, attrs: { ...obj.attrs, children: children.filter((c: FlickObject) => !idsToDelete.has(c.id)) } }
+          }
+          const children = (obj.attrs.children as FlickObject[]) ?? []
+          return { ...obj, attrs: { ...obj.attrs, children: removeFromGroupChain(children, depth + 1) } }
+        })
+      }
+
+      const newObjects = removeFromGroupChain(kf.objects, 0)
+      set({
+        ...pushUndo(s),
+        project: updateActiveLayers(s, (layers) =>
+          layers.map((l: Layer) =>
+            l.id !== groupLayer.id ? l : {
+              ...l,
+              keyframes: l.keyframes.map((k: Keyframe) =>
+                k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+              ),
+            },
+          ),
+        ),
+        selectedObjectIds: [],
+      })
+      return
+    }
+
+    // Pure group edit context (no clips)
     const rootEntry = ctx[0]
     const layer = s.project.layers.find((l: Layer) => l.id === rootEntry.layerId)
     if (!layer) return
     const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
     if (!kf) return
-
-    const idsToDelete = new Set(objectIds)
 
     function removeFromObjects(objects: FlickObject[], depth: number): FlickObject[] {
       const targetId = ctx[depth].objectId
@@ -1165,8 +1376,7 @@ export const useStore = create<EditorState>((set) => ({
         if (obj.id !== targetId) return obj
         if (depth === ctx.length - 1) {
           const children = (obj.attrs.children as FlickObject[]) ?? []
-          const newChildren = children.filter((child: FlickObject) => !idsToDelete.has(child.id))
-          return { ...obj, attrs: { ...obj.attrs, children: newChildren } }
+          return { ...obj, attrs: { ...obj.attrs, children: children.filter((c: FlickObject) => !idsToDelete.has(c.id)) } }
         }
         const children = (obj.attrs.children as FlickObject[]) ?? []
         return { ...obj, attrs: { ...obj.attrs, children: removeFromObjects(children, depth + 1) } }
@@ -1174,9 +1384,94 @@ export const useStore = create<EditorState>((set) => ({
     }
 
     const newObjects = removeFromObjects(kf.objects, 0)
-    const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) =>
+    set({
+      ...pushUndo(s),
+      project: {
+        ...s.project,
+        layers: s.project.layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: l.keyframes.map((k: Keyframe) =>
+              k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+            ),
+          },
+        ),
+      },
+      selectedObjectIds: [],
+    })
+  },
+
+  // ── Clip actions ──
+
+  createClipFromSelection: () => {
+    const s: EditorState = useStore.getState()
+    if (s.selectedObjectIds.length === 0) return
+    const layers = getActiveLayers(s)
+    const layer = layers.find((l: Layer) => l.id === s.activeLayerId)
+    if (!layer) return
+    const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
+    if (!kf) return
+
+    const selectedSet = new Set(s.selectedObjectIds)
+    const selectedObjs = kf.objects.filter((o: FlickObject) => selectedSet.has(o.id))
+    if (selectedObjs.length === 0) return
+
+    // Compute union bbox center → clip origin
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const obj of selectedObjs) {
+      const bbox = computeBBox(obj)
+      if (!bbox) continue
+      if (bbox.x < minX) minX = bbox.x
+      if (bbox.y < minY) minY = bbox.y
+      if (bbox.x + bbox.width > maxX) maxX = bbox.x + bbox.width
+      if (bbox.y + bbox.height > maxY) maxY = bbox.y + bbox.height
+    }
+    if (!isFinite(minX)) return
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
+
+    // Offset each object to clip-local coords (centered at origin)
+    const clipObjects: FlickObject[] = selectedObjs.map((obj: FlickObject) => {
+      const offsetAttrs = dragAttrs(obj.type, obj.attrs, -cx, -cy)
+      return { ...obj, attrs: { ...obj.attrs, ...offsetAttrs } }
+    })
+
+    // Create clip definition
+    const clipId = generateId()
+    const clipLayerId = generateId()
+    const timeline = getActiveTimeline(s)
+    const clipDef: ClipDefinition = {
+      id: clipId,
+      name: `Clip ${s.project.clips.length + 1}`,
+      frameRate: timeline.frameRate,
+      width: timeline.width,
+      height: timeline.height,
+      totalFrames: timeline.totalFrames,
+      layers: [{
+        id: clipLayerId,
+        name: 'Layer 1',
+        visible: true,
+        locked: false,
+        keyframes: [{ frame: 1, objects: clipObjects, tween: 'discrete', easeDirection: 'in-out' }],
+      }],
+    }
+
+    // Create clip instance on stage
+    const instanceId = generateId()
+    const clipInstance: FlickObject = {
+      id: instanceId,
+      type: 'clip',
+      attrs: { x: cx, y: cy, rotation: 0, scaleX: 1, scaleY: 1, clipId },
+    }
+
+    // Replace selected objects with clip instance on THIS keyframe only
+    const firstSelectedIdx = kf.objects.findIndex((o: FlickObject) => selectedSet.has(o.id))
+    const remaining = kf.objects.filter((o: FlickObject) => !selectedSet.has(o.id))
+    const newObjects = [...remaining]
+    newObjects.splice(Math.min(firstSelectedIdx, newObjects.length), 0, clipInstance)
+
+    const updatedProject = updateActiveLayers(s, (lyrs) =>
+      lyrs.map((l: Layer) =>
         l.id !== layer.id ? l : {
           ...l,
           keyframes: l.keyframes.map((k: Keyframe) =>
@@ -1184,18 +1479,38 @@ export const useStore = create<EditorState>((set) => ({
           ),
         },
       ),
-    }
+    )
     set({
       ...pushUndo(s),
-      project: newProject,
-      selectedObjectIds: [],
+      project: { ...updatedProject, clips: [...updatedProject.clips, clipDef] },
+      selectedObjectIds: [instanceId],
     })
   },
+
+  renameClip: (clipId, name) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        clips: state.project.clips.map((c: ClipDefinition) =>
+          c.id !== clipId ? c : { ...c, name },
+        ),
+      },
+    })),
+
+  deleteClipDefinition: (clipId) =>
+    set((state) => ({
+      ...pushUndo(state),
+      project: {
+        ...state.project,
+        clips: state.project.clips.filter((c: ClipDefinition) => c.id !== clipId),
+      },
+    })),
 
   ungroupSelectedObject: () => {
     const s: EditorState = useStore.getState()
     if (s.selectedObjectIds.length !== 1) return
-    const layer = s.project.layers.find((l: Layer) => l.id === s.activeLayerId)
+    const layer = getActiveLayers(s).find((l: Layer) => l.id === s.activeLayerId)
     if (!layer) return
     const kf = layer.keyframes.find((k: Keyframe) => k.frame === s.currentFrame)
     if (!kf) return
@@ -1236,20 +1551,18 @@ export const useStore = create<EditorState>((set) => ({
     const newObjects = [...kf.objects]
     newObjects.splice(groupIdx, 1, ...extracted)
 
-    const newProject: Project = {
-      ...s.project,
-      layers: s.project.layers.map((l: Layer) =>
-        l.id !== layer.id ? l : {
-          ...l,
-          keyframes: l.keyframes.map((k: Keyframe) =>
-            k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
-          ),
-        },
-      ),
-    }
     set({
       ...pushUndo(s),
-      project: newProject,
+      project: updateActiveLayers(s, (layers) =>
+        layers.map((l: Layer) =>
+          l.id !== layer.id ? l : {
+            ...l,
+            keyframes: l.keyframes.map((k: Keyframe) =>
+              k.frame !== s.currentFrame ? k : { ...k, objects: newObjects },
+            ),
+          },
+        ),
+      ),
       selectedObjectIds: extracted.map((o: FlickObject) => o.id),
     })
   },

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '../store'
+import { useStore, getActiveTimeline } from '../store'
 import { getActiveKeyframe } from '../types/project'
 import type { FlickObject } from '../types/project'
 import './Hierarchy.css'
@@ -10,6 +10,7 @@ const TYPE_ICONS: Record<string, string> = {
   path: '✎',
   line: '╱',
   group: '▣',
+  clip: '▶',
   circle: '◯',
   text: 'T',
 }
@@ -19,7 +20,7 @@ type DragState =
   | { kind: 'layer'; layerId: string }
 
 export function Hierarchy() {
-  const project = useStore((s) => s.project)
+  const activeLayers = useStore((s) => getActiveTimeline(s).layers)
   const currentFrame = useStore((s) => s.currentFrame)
   const selectedLayerIds = useStore((s) => s.selectedLayerIds)
   const selectedObjectIds = useStore((s) => s.selectedObjectIds)
@@ -163,7 +164,7 @@ export function Hierarchy() {
 
   return (
     <div className="hierarchy">
-      {project.layers.map((layer, layerIdx) => {
+      {activeLayers.map((layer, layerIdx) => {
         const activeKf = getActiveKeyframe(layer, currentFrame)
         const objects = activeKf?.objects ?? []
         const isActive = selectedLayerIds.includes(layer.id)
@@ -184,10 +185,10 @@ export function Hierarchy() {
                 onClick={(e) => {
                   if (e.shiftKey) {
                     const s = useStore.getState()
-                    const activeIdx = project.layers.findIndex((l) => l.id === s.activeLayerId)
+                    const activeIdx = activeLayers.findIndex((l) => l.id === s.activeLayerId)
                     const minIdx = Math.min(activeIdx, layerIdx)
                     const maxIdx = Math.max(activeIdx, layerIdx)
-                    setSelectedLayerIds(project.layers.slice(minIdx, maxIdx + 1).map((l) => l.id))
+                    setSelectedLayerIds(activeLayers.slice(minIdx, maxIdx + 1).map((l) => l.id))
                   } else if (e.ctrlKey || e.metaKey) {
                     useStore.getState().toggleSelectedLayerId(layer.id)
                   } else {
@@ -234,7 +235,7 @@ export function Hierarchy() {
         )
       })}
       {/* Drop indicator after last layer */}
-      {dragState?.kind === 'layer' && layerDropIndex === project.layers.length && (
+      {dragState?.kind === 'layer' && layerDropIndex === activeLayers.length && (
         <div className="hierarchy-drop-indicator layer" />
       )}
     </div>
