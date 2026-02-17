@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useLayoutEffect, useEffect } from 'react'
-import { useStore, getActiveTimeline } from './store'
+import { useState, useRef, useCallback, useLayoutEffect, useEffect, useMemo } from 'react'
+import { useStore, getActiveTimeline, getClipDimensions } from './store'
 import { getActiveKeyframe, getNextKeyframe, generateId, getSingleSelectedKeyframe, createProject } from './types/project'
 import type { Layer } from './types/project'
 import { resolveFrame } from './lib/interpolate'
@@ -64,6 +64,7 @@ function getFrameType(layer: Layer, frame: number): 'keyframe' | 'keyframe-empty
 function App() {
   console.log(useStore())
   const project = useStore((s) => s.project)
+  const clipDims = useMemo(() => getClipDimensions(project), [project])
   const currentFrame = useStore((s) => s.currentFrame)
   const setCurrentFrame = useStore((s) => s.setCurrentFrame)
   const activeLayerId = useStore((s) => s.activeLayerId)
@@ -409,6 +410,21 @@ function App() {
   const editTarget = (() => {
     if (editContext.length === 0) return null
     const rootEntry = editContext[0]
+
+    // Isolated clip edit: no parent layer/object, clip shown standalone
+    const isIsolated = rootEntry.type === 'clip' && !rootEntry.layerId
+    if (isIsolated) {
+      return {
+        children: null,
+        isClipEdit: true,
+        isIsolated: true,
+        transformStr: '',
+        groupX: 0, groupY: 0,
+        mat: [1, 0, 0, 1, 0, 0] as [number, number, number, number, number, number],
+        layerId: '',
+      }
+    }
+
     const layer = project.layers.find((l) => l.id === rootEntry.layerId)
     if (!layer) return null
 
@@ -474,6 +490,7 @@ function App() {
     return {
       children: isClipEdit ? null : currentObjs, // null for clip edit (uses activeLayers instead)
       isClipEdit,
+      isIsolated: false,
       transformStr: transformParts.join(' '),
       // World position of local origin (0,0)
       groupX: mtx, groupY: mty,
@@ -663,12 +680,12 @@ function App() {
           }
         }
         const { id, type, attrs } = scaleObjRef.current
-        const bbox = computeBBox({ id, type, attrs })
+        const bbox = computeBBox({ id, type, attrs }, clipDims)
         if (!bbox) return
         const rotation = (attrs.rotation as number) ?? 0
         const newAttrs = computeScale(
           type, attrs, bbox, scaleHandleRef.current,
-          dx, dy, rotation, e.shiftKey, e.ctrlKey,
+          dx, dy, rotation, e.shiftKey, e.ctrlKey, clipDims,
         )
         // Don't commit — store as preview
         setScalePreview({ id, type, attrs: { ...attrs, ...newAttrs } })
@@ -701,7 +718,7 @@ function App() {
           const oldAngle = Math.atan2(mouseY - opy, mouseX - opx)
           const oldDelta = oldAngle - rotateRefAngleRef.current
 
-          const bbox = computeBBox({ id, type, attrs })
+          const bbox = computeBBox({ id, type, attrs }, clipDims)
           if (bbox) {
             const rot = (attrs.rotation as number) ?? 0
             const origin = absoluteOrigin({ id, type, attrs }, bbox)
@@ -736,7 +753,7 @@ function App() {
           newRotation = Math.round(newRotation / 15) * 15
         }
 
-        const bbox = computeBBox({ id, type, attrs })
+        const bbox = computeBBox({ id, type, attrs }, clipDims)
         if (!bbox) return
         const rotAttrs = computeRotationAttrs(
           type, attrs, bbox, rotatePivotRef.current, newRotation,
@@ -805,7 +822,7 @@ function App() {
         }
       }
     },
-    [setPan],
+    [setPan, clipDims],
   )
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -848,7 +865,7 @@ function App() {
           if (!layer.keyframes.some((kf) => kf.frame === s.currentFrame)) continue
           const objects = resolveFrame(layer, s.currentFrame, getActiveTimeline(s).totalFrames)
           for (const obj of objects) {
-            const bbox = computeBBox(obj)
+            const bbox = computeBBox(obj, clipDims)
             if (!bbox) continue
             const rot = (obj.attrs.rotation as number) ?? 0
             const origin = absoluteOrigin(obj, bbox)
@@ -1132,6 +1149,7 @@ function App() {
         <div
           className="canvas-area"
           ref={canvasAreaRef}
+          style={editTarget?.isIsolated ? { background: '#ffffff' } : undefined}
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes('application/x-flick-clip')) {
               e.preventDefault()
@@ -1185,15 +1203,25 @@ function App() {
               </defs>
 
               <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-                <rect
-                  x={0}
-                  y={0}
-                  width={project.width}
-                  height={project.height}
-                  fill="#e8e8e8"
-                  filter="url(#canvas-shadow)"
-                  pointerEvents="all"
-                />
+                {/* Stage background */}
+                {editTarget?.isIsolated ? (
+                  /* Isolated clip view: invisible rect for pointer events (background is CSS) */
+                  <rect
+                    x={-1e6} y={-1e6} width={2e6} height={2e6}
+                    fill="transparent"
+                    pointerEvents="all"
+                  />
+                ) : (
+                  <rect
+                    x={0}
+                    y={0}
+                    width={project.width}
+                    height={project.height}
+                    fill="#e8e8e8"
+                    filter="url(#canvas-shadow)"
+                    pointerEvents="all"
+                  />
+                )}
 
                 <g pointerEvents={activeTool === 'select' ? undefined : 'none'}>
                   {/* Normal mode: all layers interactive */}
@@ -1282,7 +1310,8 @@ function App() {
 
                     return (
                     <>
-                      {/* Dimmed background: all project layers non-interactive */}
+                      {/* Dimmed background: all project layers non-interactive (skip for isolated clip view) */}
+                      {!editTarget.isIsolated && (
                       <g opacity={0.3} pointerEvents="none">
                         {project.layers
                           .filter((l) => l.visible)
@@ -1302,6 +1331,7 @@ function App() {
                             )
                           })}
                       </g>
+                      )}
                       {/* Origin cross indicator */}
                       <g transform={`translate(${editTarget.groupX}, ${editTarget.groupY})`} pointerEvents="none">
                         <line x1={-12 / zoom} y1={0} x2={12 / zoom} y2={0} stroke="#ff4488" strokeWidth={1.5 / zoom} />
@@ -1400,23 +1430,29 @@ function App() {
 
                 {/* Drag preview ghost */}
                 {dragPreview && (
+                  <ClipRenderContext.Provider value={{ project, parentLayer: activeLayers.find((l) => l.id === activeLayerId) ?? activeLayers[0], parentFrame: currentFrame }}>
                   <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={dragPreview} />
                   </g>
+                  </ClipRenderContext.Provider>
                 )}
 
                 {/* Scale preview ghost */}
                 {scalePreview && (
+                  <ClipRenderContext.Provider value={{ project, parentLayer: activeLayers.find((l) => l.id === activeLayerId) ?? activeLayers[0], parentFrame: currentFrame }}>
                   <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={scalePreview} />
                   </g>
+                  </ClipRenderContext.Provider>
                 )}
 
                 {/* Rotation preview ghost */}
                 {rotatePreview && (
+                  <ClipRenderContext.Provider value={{ project, parentLayer: activeLayers.find((l) => l.id === activeLayerId) ?? activeLayers[0], parentFrame: currentFrame }}>
                   <g opacity={0.4} transform={editTarget ? editTarget.transformStr : undefined}>
                     <SvgObject obj={rotatePreview} />
                   </g>
+                  </ClipRenderContext.Provider>
                 )}
 
                 {/* Draw preview ghost */}
@@ -1470,6 +1506,7 @@ function App() {
                         <BoundingBox
                           obj={selObj}
                           zoom={zoom}
+                          clipDimensions={clipDims}
                           onHandleMouseDown={singleSelected ? (handle, e) => {
                             if (e.button !== 0) return
                             e.stopPropagation()
@@ -1505,7 +1542,7 @@ function App() {
                             const layerId = editTarget ? editTarget.layerId : activeLayerId
                             if (!kfObj) return
 
-                            const bbox = computeBBox(kfObj)
+                            const bbox = computeBBox(kfObj, clipDims)
                             if (!bbox) return
                             const rot = (kfObj.attrs.rotation as number) ?? 0
                             const origin = absoluteOrigin(kfObj, bbox)

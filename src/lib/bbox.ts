@@ -11,7 +11,7 @@ type Point = [number, number]
 
 /** Compute the axis-aligned bounding box for an object (before rotation).
  *  For clip objects, pass clipDimensions to get accurate sizing. */
-export function computeBBox(obj: FlickObject, clipDimensions?: Map<string, { width: number; height: number }>): BBox | null {
+export function computeBBox(obj: FlickObject, clipDimensions?: Map<string, BBox>): BBox | null {
   const a = obj.attrs as Record<string, number>
 
   switch (obj.type) {
@@ -54,12 +54,17 @@ export function computeBBox(obj: FlickObject, clipDimensions?: Map<string, { wid
       const clipX = a.x ?? 0
       const clipY = a.y ?? 0
       const clipId = obj.attrs.clipId as string | undefined
-      const dims = clipId && clipDimensions?.get(clipId)
-      const baseW = dims ? dims.width : 100
-      const baseH = dims ? dims.height : 100
-      const w = baseW * Math.abs(sx)
-      const h = baseH * Math.abs(sy)
-      return { x: clipX - w / 2, y: clipY - h / 2, width: w, height: h }
+      const content = clipId && clipDimensions?.get(clipId)
+      // Content bbox in local clip space; scale then translate to world
+      const cMinX = content ? content.x : -50
+      const cMinY = content ? content.y : -50
+      const cW = content ? content.width : 100
+      const cH = content ? content.height : 100
+      const worldMinX = Math.min(cMinX * sx, (cMinX + cW) * sx)
+      const worldMinY = Math.min(cMinY * sy, (cMinY + cH) * sy)
+      const w = cW * Math.abs(sx)
+      const h = cH * Math.abs(sy)
+      return { x: clipX + worldMinX, y: clipY + worldMinY, width: w, height: h }
     }
 
     case 'group': {

@@ -24,21 +24,7 @@ export function ClipLibrary() {
   }
 
   const handleDoubleClick = (clip: ClipDefinition) => {
-    // Find an instance of this clip on the current frame to enter it
-    const s = useStore.getState()
-    for (const layer of s.project.layers) {
-      for (const kf of layer.keyframes) {
-        if (kf.frame !== s.currentFrame) continue
-        for (const obj of kf.objects) {
-          if (obj.type === 'clip' && obj.attrs.clipId === clip.id) {
-            s.enterClip(obj.id, layer.id, clip.id)
-            return
-          }
-        }
-      }
-    }
-    // No instance found on current frame — just enter with a dummy
-    // (user would typically double-click an instance on canvas instead)
+    useStore.getState().enterClipIsolated(clip.id)
   }
 
   if (clips.length === 0) {

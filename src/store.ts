@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { createProject, createLayer, generateId } from './types/project'
 import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, FrameSelection, Clipboard, FrameClipboardLayer, FrameClipboardEntry, ClipDefinition, Timeline } from './types/project'
 import { recenterPath, dragAttrs, applyNewBBox } from './lib/transform'
-import { computeBBox } from './lib/bbox'
+import { computeBBox, absoluteOrigin, rotatedCorners } from './lib/bbox'
+import type { BBox } from './lib/bbox'
 import { resolveFrame } from './lib/interpolate'
 
 const MAX_UNDO = 100
@@ -67,6 +68,7 @@ interface EditorState {
   _savedFrames: number[]
   enterGroup: (objectId: string, layerId: string) => void
   enterClip: (objectId: string, layerId: string, clipId: string) => void
+  enterClipIsolated: (clipId: string) => void
   exitEditContext: () => void
   exitToStage: () => void
 
@@ -239,6 +241,36 @@ export function getActiveTimeline(state: EditorState): Timeline {
     }
   }
   return state.project
+}
+
+/** Compute actual content bounds for each clip definition (union bbox of objects at frame 1). */
+export function getClipDimensions(project: Project): Map<string, BBox> {
+  const dims = new Map<string, BBox>()
+  for (const clip of project.clips) {
+    const objects = clip.layers
+      .filter((l) => l.visible)
+      .flatMap((l) => resolveFrame(l, 1, clip.totalFrames))
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const obj of objects) {
+      const bb = computeBBox(obj)
+      if (!bb) continue
+      const rot = (obj.attrs.rotation as number) ?? 0
+      const origin = absoluteOrigin(obj, bb)
+      const corners = rotatedCorners(bb, rot, origin)
+      for (const [cx, cy] of corners) {
+        if (cx < minX) minX = cx
+        if (cx > maxX) maxX = cx
+        if (cy < minY) minY = cy
+        if (cy > maxY) maxY = cy
+      }
+    }
+    if (isFinite(minX)) {
+      dims.set(clip.id, { x: minX, y: minY, width: maxX - minX, height: maxY - minY })
+    } else {
+      dims.set(clip.id, { x: 0, y: 0, width: 0, height: 0 })
+    }
+  }
+  return dims
 }
 
 /** Get the active layers array based on edit context. */
@@ -588,6 +620,24 @@ export const useStore = create<EditorState>((set) => ({
         inspectorFocus: 'canvas' as const,
       }
     }),
+  enterClipIsolated: (clipId) => {
+    set((state) => {
+      const clip = state.project.clips.find((c: ClipDefinition) => c.id === clipId)
+      if (!clip) return state
+      return {
+        editContext: [{ type: 'clip' as const, objectId: '', layerId: '', clipId }],
+        _savedFrames: [state.currentFrame],
+        currentFrame: 1,
+        activeLayerId: clip.layers[0]?.id ?? '',
+        selectedLayerIds: clip.layers[0] ? [clip.layers[0].id] : [],
+        selectedObjectIds: [],
+        frameSelection: null,
+        inspectorFocus: 'canvas' as const,
+      }
+    })
+    // Recenter on clip content after entering isolated mode
+    useStore.getState().recenterView()
+  },
   exitEditContext: () =>
     set((state) => {
       const popped = state.editContext[state.editContext.length - 1]
@@ -640,6 +690,53 @@ export const useStore = create<EditorState>((set) => ({
     const { width: cw, height: ch } = s.containerSize
     if (cw === 0 || ch === 0) return
     const padding = 40
+
+    // Isolated clip view: fit to content bounds
+    const isolated = s.editContext.length > 0 && s.editContext[0].type === 'clip' && !s.editContext[0].layerId
+    if (isolated) {
+      const tl = getActiveTimeline(s)
+      const allObjs = tl.layers
+        .filter((l) => l.visible)
+        .flatMap((l) => resolveFrame(l, s.currentFrame, tl.totalFrames))
+      const clipDims = getClipDimensions(s.project)
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const obj of allObjs) {
+        const bb = computeBBox(obj, clipDims)
+        if (!bb) continue
+        const rot = (obj.attrs.rotation as number) ?? 0
+        const origin = absoluteOrigin(obj, bb)
+        const corners = rotatedCorners(bb, rot, origin)
+        for (const [cx, cy] of corners) {
+          if (cx < minX) minX = cx
+          if (cx > maxX) maxX = cx
+          if (cy < minY) minY = cy
+          if (cy > maxY) maxY = cy
+        }
+      }
+      if (!isFinite(minX)) {
+        // No content — just center on origin
+        set({ zoom: 1, pan: { x: cw / 2, y: ch / 2 } })
+        return
+      }
+      const contentW = maxX - minX
+      const contentH = maxY - minY
+      const contentCx = (minX + maxX) / 2
+      const contentCy = (minY + maxY) / 2
+      const fitZoom = Math.min(
+        (cw - padding * 2) / (contentW || 1),
+        (ch - padding * 2) / (contentH || 1),
+        4, // cap max zoom for tiny content
+      )
+      set({
+        zoom: fitZoom,
+        pan: {
+          x: cw / 2 - contentCx * fitZoom,
+          y: ch / 2 - contentCy * fitZoom,
+        },
+      })
+      return
+    }
+
     const scaleX = (cw - padding * 2) / s.project.width
     const scaleY = (ch - padding * 2) / s.project.height
     const fitZoom = Math.min(scaleX, scaleY)
@@ -654,6 +751,14 @@ export const useStore = create<EditorState>((set) => ({
   setView100: () => {
     const s = useStore.getState()
     const { width: cw, height: ch } = s.containerSize
+
+    // Isolated clip view: center on origin at 100%
+    const isolated = s.editContext.length > 0 && s.editContext[0].type === 'clip' && !s.editContext[0].layerId
+    if (isolated) {
+      set({ zoom: 1, pan: { x: cw / 2, y: ch / 2 } })
+      return
+    }
+
     set({
       zoom: 1,
       pan: {
@@ -1133,9 +1238,10 @@ export const useStore = create<EditorState>((set) => ({
     if (selectedObjs.length < 2) return
 
     // Compute union bbox center → group origin
+    const cdims = getClipDimensions(s.project)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const obj of selectedObjs) {
-      const bbox = computeBBox(obj)
+      const bbox = computeBBox(obj, cdims)
       if (!bbox) continue
       if (bbox.x < minX) minX = bbox.x
       if (bbox.y < minY) minY = bbox.y
@@ -1417,9 +1523,10 @@ export const useStore = create<EditorState>((set) => ({
     if (selectedObjs.length === 0) return
 
     // Compute union bbox center → clip origin
+    const cdimsClip = getClipDimensions(s.project)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const obj of selectedObjs) {
-      const bbox = computeBBox(obj)
+      const bbox = computeBBox(obj, cdimsClip)
       if (!bbox) continue
       if (bbox.x < minX) minX = bbox.x
       if (bbox.y < minY) minY = bbox.y
@@ -1529,7 +1636,7 @@ export const useStore = create<EditorState>((set) => ({
       let newAttrs = { ...child.attrs }
       // If scale is non-trivial, bake it into the child's geometry
       if (gScaleX !== 1 || gScaleY !== 1) {
-        const childBBox = computeBBox(child)
+        const childBBox = computeBBox(child, getClipDimensions(s.project))
         if (childBBox) {
           const scaledBBox = {
             x: childBBox.x * gScaleX,
@@ -1537,7 +1644,7 @@ export const useStore = create<EditorState>((set) => ({
             width: childBBox.width * Math.abs(gScaleX),
             height: childBBox.height * Math.abs(gScaleY),
           }
-          const baked = applyNewBBox(child.type, child.attrs, scaledBBox)
+          const baked = applyNewBBox(child.type, child.attrs, scaledBBox, getClipDimensions(s.project))
           newAttrs = { ...newAttrs, ...baked }
         }
       }

@@ -128,6 +128,7 @@ export function computeScale(
   rotation: number,
   shiftKey: boolean,
   ctrlKey: boolean,
+  clipDimensions?: Map<string, BBox>,
 ): Record<string, unknown> {
   if (bbox.width === 0 && bbox.height === 0) return {}
 
@@ -219,7 +220,7 @@ export function computeScale(
   const newY = anchorWorldY - newH * 0.5 - newDax * sin - newDay * cos
 
   // 6. Apply per object type
-  return applyNewBBox(type, attrs, { x: newX, y: newY, width: newW, height: newH })
+  return applyNewBBox(type, attrs, { x: newX, y: newY, width: newW, height: newH }, clipDimensions)
 }
 
 /** Convert a desired bounding box into the correct attrs for a given object type. */
@@ -227,6 +228,7 @@ export function applyNewBBox(
   type: string,
   attrs: Record<string, unknown>,
   newBBox: BBox,
+  clipDimensions?: Map<string, BBox>,
 ): Record<string, unknown> {
   switch (type) {
     case 'rect':
@@ -274,7 +276,7 @@ export function applyNewBBox(
     case 'group': {
       const children = (attrs.children as FlickObject[]) ?? []
       if (children.length === 0) return { x: newBBox.x, y: newBBox.y, scaleX: 1, scaleY: 1 }
-      const childrenBBox = computeGroupChildrenBBox(children)
+      const childrenBBox = computeGroupChildrenBBox(children, clipDimensions)
       if (!childrenBBox || childrenBBox.width === 0 || childrenBBox.height === 0) {
         return { x: newBBox.x, y: newBBox.y }
       }
@@ -291,15 +293,22 @@ export function applyNewBBox(
       // Clip scaling works like group: adjust scaleX/scaleY + position
       const oldSx = (attrs.scaleX as number) ?? 1
       const oldSy = (attrs.scaleY as number) ?? 1
-      const oldBBox = computeBBox({ id: '', type: 'clip', attrs } as FlickObject)
+      const oldClipX = (attrs.x as number) ?? 0
+      const oldClipY = (attrs.y as number) ?? 0
+      const oldBBox = computeBBox({ id: '', type: 'clip', attrs } as FlickObject, clipDimensions)
       if (!oldBBox || oldBBox.width === 0 || oldBBox.height === 0) {
         return { x: newBBox.x + newBBox.width / 2, y: newBBox.y + newBBox.height / 2 }
       }
-      const newScaleX = oldSx * (newBBox.width / oldBBox.width)
-      const newScaleY = oldSy * (newBBox.height / oldBBox.height)
+      const ratioW = newBBox.width / oldBBox.width
+      const ratioH = newBBox.height / oldBBox.height
+      const newScaleX = oldSx * ratioW
+      const newScaleY = oldSy * ratioH
+      // Preserve the relationship between clip origin and bbox corner
+      const newX = newBBox.x - (oldBBox.x - oldClipX) * ratioW
+      const newY = newBBox.y - (oldBBox.y - oldClipY) * ratioH
       return {
-        x: newBBox.x + newBBox.width / 2,
-        y: newBBox.y + newBBox.height / 2,
+        x: newX,
+        y: newY,
         scaleX: newScaleX,
         scaleY: newScaleY,
       }
@@ -310,10 +319,10 @@ export function applyNewBBox(
   }
 }
 
-function computeGroupChildrenBBox(children: FlickObject[]): BBox | null {
+function computeGroupChildrenBBox(children: FlickObject[], clipDimensions?: Map<string, BBox>): BBox | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const child of children) {
-    const b = computeBBox(child)
+    const b = computeBBox(child, clipDimensions)
     if (!b) continue
     if (b.x < minX) minX = b.x
     if (b.y < minY) minY = b.y

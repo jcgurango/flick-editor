@@ -1,5 +1,6 @@
 import type { FlickObject } from '../types/project'
 import { computeBBox, absoluteOrigin, rotatedCorners } from '../lib/bbox'
+import type { BBox } from '../lib/bbox'
 
 export type HandleId =
   | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br'
@@ -10,6 +11,7 @@ export type RotateCorner = 'tl' | 'tr' | 'bl' | 'br'
 interface BoundingBoxProps {
   obj: FlickObject
   zoom: number
+  clipDimensions?: Map<string, BBox>
   onHandleMouseDown?: (handle: HandleId, e: React.MouseEvent) => void
   onRotateMouseDown?: (corner: RotateCorner, e: React.MouseEvent) => void
 }
@@ -17,8 +19,8 @@ interface BoundingBoxProps {
 const HANDLE_SIZE = 8
 const ROTATE_ZONE = 20
 
-export function BoundingBox({ obj, zoom, onHandleMouseDown, onRotateMouseDown }: BoundingBoxProps) {
-  const bbox = computeBBox(obj)
+export function BoundingBox({ obj, zoom, clipDimensions, onHandleMouseDown, onRotateMouseDown }: BoundingBoxProps) {
+  const bbox = computeBBox(obj, clipDimensions)
   if (!bbox) return null
 
   const rotation = (obj.attrs.rotation as number) ?? 0
