@@ -92,37 +92,38 @@ export function Inspector() {
   const selectedObj = (() => {
     if (selectedObjectIds.length !== 1) return null
     if (editContext.length > 0) {
-      // Check if we're in a clip edit context
-      const clipIdx = editContext.findIndex(e => e.type === 'clip')
+      const lastEntry = editContext[editContext.length - 1]
+      if (lastEntry.type === 'clip') {
+        // Clip edit (including nested clips) — object is on the active document's keyframe
+        return activeKf?.objects.find((o) => o.id === selectedObjectIds[0]) ?? null
+      }
+      // Group edit — find the last clip entry (if any) to determine starting point
+      let clipIdx = -1
+      for (let i = editContext.length - 1; i >= 0; i--) {
+        if (editContext[i].type === 'clip') { clipIdx = i; break }
+      }
+      const groupEntries = clipIdx !== -1 ? editContext.slice(clipIdx + 1) : editContext
+      // Get starting objects: from clip's active layer or from project layer
+      let currentObjs: import('../types/project').FlickObject[]
       if (clipIdx !== -1) {
-        const groupsAfterClip = editContext.slice(clipIdx + 1)
-        if (groupsAfterClip.length === 0) {
-          // Pure clip edit — object is directly on clip layer
-          return activeKf?.objects.find((o) => o.id === selectedObjectIds[0]) ?? null
-        }
-        // Group inside clip — walk group chain within clip layers
-        const groupRoot = groupsAfterClip[0]
+        // Groups after a clip — start from the clip's active layer keyframe
+        const groupRoot = groupEntries[0]
         const groupLayer = activeLayers.find((l) => l.id === groupRoot.layerId)
         if (!groupLayer) return null
         const kf = groupLayer.keyframes.find((k) => k.frame === currentFrame)
         if (!kf) return null
-        let currentObjs = kf.objects
-        for (const entry of groupsAfterClip) {
-          const grp = currentObjs.find((o) => o.id === entry.objectId)
-          if (grp?.type === 'group') {
-            currentObjs = (grp.attrs.children as import('../types/project').FlickObject[]) ?? []
-          } else return null
-        }
-        return currentObjs.find((o) => o.id === selectedObjectIds[0]) ?? null
+        currentObjs = kf.objects
+      } else {
+        // Pure group edit — start from project layer
+        const rootEntry = editContext[0]
+        const rootLayer = project.layers.find((l) => l.id === rootEntry.layerId)
+        if (!rootLayer) return null
+        const kf = rootLayer.keyframes.find((k) => k.frame === currentFrame)
+        if (!kf) return null
+        currentObjs = kf.objects
       }
-      // Pure group edit — walk project layers
-      const rootEntry = editContext[0]
-      const rootLayer = project.layers.find((l) => l.id === rootEntry.layerId)
-      if (!rootLayer) return null
-      const kf = rootLayer.keyframes.find((k) => k.frame === currentFrame)
-      if (!kf) return null
-      let currentObjs = kf.objects
-      for (const entry of editContext) {
+      // Walk group chain
+      for (const entry of groupEntries) {
         const grp = currentObjs.find((o) => o.id === entry.objectId)
         if (grp?.type === 'group') {
           currentObjs = (grp.attrs.children as import('../types/project').FlickObject[]) ?? []
