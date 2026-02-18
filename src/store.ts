@@ -252,7 +252,7 @@ export function getClipDimensions(project: Project): Map<string, BBox> {
       .flatMap((l) => resolveFrame(l, 1, clip.totalFrames))
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const obj of objects) {
-      const bb = computeBBox(obj)
+      const bb = computeBBox(obj, dims)
       if (!bb) continue
       const rot = (obj.attrs.rotation as number) ?? 0
       const origin = absoluteOrigin(obj, bb)
@@ -1293,33 +1293,34 @@ export const useStore = create<EditorState>((set) => ({
     if (s.editContext.length === 0) return
 
     const ctx = s.editContext
+    const lastEntry = ctx[ctx.length - 1]
 
-    // Find the first clip entry — everything after it is groups within the clip
-    const clipIdx = ctx.findIndex(e => e.type === 'clip')
+    // If the last entry is a clip, the object is directly on the active clip's layers
+    if (lastEntry.type === 'clip') {
+      set({
+        ...pushUndo(s),
+        project: updateActiveLayers(s, (layers) =>
+          layers.map((l: Layer) => ({
+            ...l,
+            keyframes: l.keyframes.map((kf: Keyframe) =>
+              kf.frame !== s.currentFrame ? kf : {
+                ...kf,
+                objects: kf.objects.map((obj: FlickObject) =>
+                  obj.id !== objectId ? obj : { ...obj, attrs: { ...obj.attrs, ...attrs } },
+                ),
+              },
+            ),
+          })),
+        ),
+      })
+      return
+    }
+
+    // Last entry is a group — find the most recent clip (if any) to determine the base layers
+    let clipIdx = -1; for (let i = ctx.length - 1; i >= 0; i--) { if (ctx[i].type === 'clip') { clipIdx = i; break } }
     if (clipIdx !== -1) {
-      // Clip edit context: groups after the clip entry are within clip layers
+      // Groups after the last clip entry, within clip layers
       const groupsAfterClip = ctx.slice(clipIdx + 1)
-      if (groupsAfterClip.length === 0) {
-        // Pure clip edit — just update via updateActiveLayers (object is directly on clip layer)
-        set({
-          ...pushUndo(s),
-          project: updateActiveLayers(s, (layers) =>
-            layers.map((l: Layer) => ({
-              ...l,
-              keyframes: l.keyframes.map((kf: Keyframe) =>
-                kf.frame !== s.currentFrame ? kf : {
-                  ...kf,
-                  objects: kf.objects.map((obj: FlickObject) =>
-                    obj.id !== objectId ? obj : { ...obj, attrs: { ...obj.attrs, ...attrs } },
-                  ),
-                },
-              ),
-            })),
-          ),
-        })
-        return
-      }
-      // Group inside clip: navigate clip's layers → group chain
       const clipLayers = getActiveLayers(s)
       const groupRoot = groupsAfterClip[0]
       const groupLayer = clipLayers.find((l: Layer) => l.id === groupRoot.layerId)
@@ -1406,31 +1407,32 @@ export const useStore = create<EditorState>((set) => ({
 
     const ctx = s.editContext
     const idsToDelete = new Set(objectIds)
+    const lastEntry = ctx[ctx.length - 1]
 
-    // Find the first clip entry
-    const clipIdx = ctx.findIndex(e => e.type === 'clip')
+    // If the last entry is a clip, delete from the active clip's layers
+    if (lastEntry.type === 'clip') {
+      set({
+        ...pushUndo(s),
+        project: updateActiveLayers(s, (layers) =>
+          layers.map((l: Layer) => ({
+            ...l,
+            keyframes: l.keyframes.map((kf: Keyframe) =>
+              kf.frame !== s.currentFrame ? kf : {
+                ...kf,
+                objects: kf.objects.filter((obj: FlickObject) => !idsToDelete.has(obj.id)),
+              },
+            ),
+          })),
+        ),
+        selectedObjectIds: [],
+      })
+      return
+    }
+
+    // Last entry is a group — find the most recent clip (if any) to determine base layers
+    let clipIdx = -1; for (let i = ctx.length - 1; i >= 0; i--) { if (ctx[i].type === 'clip') { clipIdx = i; break } }
     if (clipIdx !== -1) {
       const groupsAfterClip = ctx.slice(clipIdx + 1)
-      if (groupsAfterClip.length === 0) {
-        // Pure clip edit — delete from clip layers directly
-        set({
-          ...pushUndo(s),
-          project: updateActiveLayers(s, (layers) =>
-            layers.map((l: Layer) => ({
-              ...l,
-              keyframes: l.keyframes.map((kf: Keyframe) =>
-                kf.frame !== s.currentFrame ? kf : {
-                  ...kf,
-                  objects: kf.objects.filter((obj: FlickObject) => !idsToDelete.has(obj.id)),
-                },
-              ),
-            })),
-          ),
-          selectedObjectIds: [],
-        })
-        return
-      }
-      // Group inside clip
       const clipLayers = getActiveLayers(s)
       const groupRoot = groupsAfterClip[0]
       const groupLayer = clipLayers.find((l: Layer) => l.id === groupRoot.layerId)

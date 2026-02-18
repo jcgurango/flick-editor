@@ -425,21 +425,21 @@ function App() {
       }
     }
 
-    const layer = project.layers.find((l) => l.id === rootEntry.layerId)
+    const savedFrames = useStore.getState()._savedFrames
+
+    // Start from the project's layers for the first entry
+    let currentLayers = project.layers
+    let frameForLevel = savedFrames[0] ?? currentFrame
+    let totalFramesForLevel = project.totalFrames
+
+    const layer = currentLayers.find((l) => l.id === rootEntry.layerId)
     if (!layer) return null
 
-    // For the root entry, we need to find the object on a keyframe
-    // Use the saved parent frame for clip contexts, or currentFrame for groups
-    const parentFrame = editContext.some(e => e.type === 'clip')
-      ? (useStore.getState()._savedFrames[0] ?? currentFrame)
-      : currentFrame
-    const kf = layer.keyframes.find((k) => k.frame === parentFrame)
-      ?? getActiveKeyframe(layer, parentFrame)
-    if (!kf) return null
-
-    let currentObjs: FlickObject[] = resolveFrame(layer, parentFrame, project.totalFrames)
+    let currentObjs: FlickObject[] = resolveFrame(layer, frameForLevel, totalFramesForLevel)
     const transformParts: string[] = []
     let isClipEdit = false
+    // Track the layer at the current edit depth (for entering nested groups/clips)
+    let currentLayerId = rootEntry.layerId
 
     // Affine matrix [a, b, c, d, tx, ty] for local→canvas mapping
     let ma = 1, mb = 0, mc = 0, md = 1, mtx = 0, mty = 0
@@ -450,7 +450,8 @@ function App() {
       ma = na; mb = nb; mc = nc; md = nd; mtx = ntx; mty = nty
     }
 
-    for (const entry of editContext) {
+    for (let i = 0; i < editContext.length; i++) {
+      const entry = editContext[i]
       const obj = currentObjs.find((o) => o.id === entry.objectId)
       if (!obj) return null
 
@@ -478,11 +479,24 @@ function App() {
       }
 
       if (entry.type === 'clip') {
-        // Clip: content is in project.clips, not in attrs.children
-        isClipEdit = true
-        break
+        if (i === editContext.length - 1) {
+          // This is the innermost clip being edited
+          isClipEdit = true
+          break
+        }
+        // Not the last entry — descend into the clip's resolved layers for the next entry
+        const clipDef = project.clips.find((c) => c.id === entry.clipId)
+        if (!clipDef) return null
+        // The frame inside this clip: use the saved frame for the next level
+        frameForLevel = savedFrames[i + 1] ?? 1
+        totalFramesForLevel = clipDef.totalFrames
+        const nextEntry = editContext[i + 1]
+        const clipLayer = clipDef.layers.find((l) => l.id === nextEntry.layerId)
+        if (!clipLayer) return null
+        currentObjs = resolveFrame(clipLayer, frameForLevel, totalFramesForLevel)
+        currentLayerId = nextEntry.layerId
       } else {
-        // Group: descend into children
+        // Group: descend into children (stay on same layer)
         currentObjs = (obj.attrs.children as FlickObject[]) ?? []
       }
     }
@@ -496,7 +510,7 @@ function App() {
       groupX: mtx, groupY: mty,
       // Affine matrix for local→canvas mapping (also used for inverse delta conversion)
       mat: [ma, mb, mc, md, mtx, mty] as [number, number, number, number, number, number],
-      layerId: rootEntry.layerId,
+      layerId: currentLayerId,
     }
   })()
 
@@ -1358,12 +1372,12 @@ function App() {
                                     onDoubleClick={activeTool === 'select' ? (e) => {
                                       if (obj.type === 'group') {
                                         e.stopPropagation()
-                                        useStore.getState().enterGroup(obj.id, editTarget.layerId)
+                                        useStore.getState().enterGroup(obj.id, clipLayer.id)
                                       } else if (obj.type === 'clip') {
                                         const clipId = obj.attrs.clipId as string | undefined
                                         if (clipId) {
                                           e.stopPropagation()
-                                          useStore.getState().enterClip(obj.id, editTarget.layerId, clipId)
+                                          useStore.getState().enterClip(obj.id, clipLayer.id, clipId)
                                         }
                                       }
                                     } : undefined}
@@ -1373,7 +1387,7 @@ function App() {
                                       e.stopPropagation()
                                       isDraggingRef.current = true
                                       dragStartRef.current = { x: e.clientX, y: e.clientY }
-                                      dragObjRef.current = { id: obj.id, layerId: editTarget.layerId, type: obj.type, attrs: { ...obj.attrs } }
+                                      dragObjRef.current = { id: obj.id, layerId: clipLayer.id, type: obj.type, attrs: { ...obj.attrs } }
                                       const s = useStore.getState()
                                       if (!s.selectedObjectIds.includes(obj.id)) {
                                         setSelectedObjectIds([obj.id])
