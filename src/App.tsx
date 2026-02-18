@@ -1266,8 +1266,9 @@ function App() {
                                 useStore.getState().setInspectorFocus('canvas')
                               } : undefined}
                               onDoubleClick={activeTool === 'select' ? (e) => {
-                                if (!isOnKeyframe || layer.locked) return
+                                if (layer.locked) return
                                 if (obj.type === 'group') {
+                                  if (!isOnKeyframe) return
                                   e.stopPropagation()
                                   useStore.getState().enterGroup(obj.id, layer.id)
                                 } else if (obj.type === 'clip') {

@@ -4,7 +4,7 @@ import type { Project, Layer, Keyframe, TweenType, EaseDirection, FlickObject, F
 import { recenterPath, dragAttrs, applyNewBBox } from './lib/transform'
 import { computeBBox, absoluteOrigin, rotatedCorners } from './lib/bbox'
 import type { BBox } from './lib/bbox'
-import { resolveFrame } from './lib/interpolate'
+import { resolveFrame, resolveClipFrame } from './lib/interpolate'
 
 const MAX_UNDO = 100
 
@@ -609,10 +609,15 @@ export const useStore = create<EditorState>((set) => ({
     set((state) => {
       const clip = state.project.clips.find((c: ClipDefinition) => c.id === clipId)
       if (!clip) return state
+      // Resolve the clip's internal frame at the current parent frame
+      const parentLayer = getActiveTimeline(state).layers.find((l) => l.id === layerId)
+      const clipFrame = parentLayer
+        ? resolveClipFrame(clip, parentLayer, objectId, state.currentFrame)
+        : 1
       return {
         editContext: [...state.editContext, { type: 'clip' as const, objectId, layerId, clipId }],
         _savedFrames: [...state._savedFrames, state.currentFrame],
-        currentFrame: 1,
+        currentFrame: clipFrame,
         activeLayerId: clip.layers[0]?.id ?? '',
         selectedLayerIds: clip.layers[0] ? [clip.layers[0].id] : [],
         selectedObjectIds: [],
