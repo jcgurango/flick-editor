@@ -58,5 +58,21 @@ export function InspectorField({ field, value, onChange }: InspectorFieldProps) 
           />
         </div>
       )
+
+    case 'select':
+      return (
+        <div className="inspector-row">
+          <span className="inspector-label">{field.label}</span>
+          <select
+            className="inspector-input"
+            value={typeof value === 'string' ? value : field.options?.[0]?.value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {field.options?.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      )
   }
 }

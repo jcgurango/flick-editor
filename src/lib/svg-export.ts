@@ -11,6 +11,7 @@ const CAMEL_TO_KEBAB: Record<string, string> = {
   strokeOpacity: 'stroke-opacity',
   fillOpacity: 'fill-opacity',
   fillRule: 'fill-rule',
+  paintOrder: 'paint-order',
   clipRule: 'clip-rule',
   fontFamily: 'font-family',
   fontSize: 'font-size',

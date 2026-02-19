@@ -1,4 +1,4 @@
-export type FieldType = 'number' | 'color' | 'text'
+export type FieldType = 'number' | 'color' | 'text' | 'select'
 
 export interface FieldDef {
   key: string
@@ -7,6 +7,7 @@ export interface FieldDef {
   min?: number
   max?: number
   step?: number
+  options?: { value: string; label: string }[]
 }
 
 const POSITION_FIELDS: FieldDef[] = [
@@ -18,6 +19,10 @@ const STYLE_FIELDS: FieldDef[] = [
   { key: 'fill', label: 'Fill', type: 'color' },
   { key: 'stroke', label: 'Stroke', type: 'color' },
   { key: 'strokeWidth', label: 'Stroke W', type: 'number', min: 0 },
+  { key: 'paintOrder', label: 'Paint Order', type: 'select', options: [
+    { value: 'normal', label: 'Normal' },
+    { value: 'stroke', label: 'Stroke first' },
+  ]},
 ]
 
 const ROTATION_FIELD: FieldDef = { key: 'rotation', label: 'Rotation', type: 'number' }
