@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { compositeFrame } from '../lib/compositor';
+import { compositeFrame, renderLayer } from '../lib/compositor';
 
 // ── Data Model ────────────────────────────────────────────
 
@@ -588,8 +588,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     let svgContent: string;
     if (fromReference) {
-      const nearest = findNearestKeyframe(layer.keyframes, frame);
-      svgContent = nearest ? nearest.svgContent : blankSvg(state.width, state.height);
+      const inner = renderLayer(layer, frame);
+      if (inner) {
+        svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${inner}\n</svg>`;
+      } else {
+        svgContent = blankSvg(state.width, state.height);
+      }
     } else {
       svgContent = blankSvg(state.width, state.height);
     }
