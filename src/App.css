@@ -323,8 +323,8 @@
   background: #444;
 }
 
-.layer-btn.off {
-  opacity: 0.4;
+.layer-vis-btn {
+  font-size: 10px !important;
 }
 
 .layer-name {

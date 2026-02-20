@@ -73,7 +73,7 @@ export function compositeFrame(
   // Render layers in reverse order (bottom-up in z-order)
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i];
-    if (!layer.visible || layer.keyframes.length === 0) continue;
+    if (!layer.viewportVisible || layer.keyframes.length === 0) continue;
 
     const inner = renderLayer(layer, frame);
     if (inner) {

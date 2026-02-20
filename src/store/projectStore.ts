@@ -23,8 +23,8 @@ export interface Keyframe {
 
 export interface AnimationLayer {
   id: string;
-  visible: boolean;
-  locked: boolean;
+  renderVisible: boolean;   // included in export (camera)
+  viewportVisible: boolean; // visible in editor (eye)
   keyframes: Keyframe[]; // Sorted by frame
 }
 
@@ -124,8 +124,8 @@ export interface ProjectState {
   addLayer: () => Promise<void>;
   removeLayer: (id: string) => void;
   moveLayer: (fromIdx: number, toIdx: number) => void;
-  toggleLayerVisibility: (id: string) => void;
-  toggleLayerLocked: (id: string) => void;
+  toggleRenderVisible: (id: string) => void;
+  toggleViewportVisible: (id: string) => void;
   selectLayer: (id: string | null) => void;
 
   // ── Keyframe actions ──────────────────────────────────
@@ -224,6 +224,8 @@ function buildProjectJson(state: {
     background: state.background,
     layers: state.layers.map((l) => ({
       id: l.id,
+      renderVisible: l.renderVisible,
+      viewportVisible: l.viewportVisible,
       keyframes: l.keyframes.map((kf) => ({
         frame: kf.frame,
         tween: kf.tween,
@@ -328,8 +330,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     const initialLayer: AnimationLayer = {
       id: 'layer-1',
-      visible: true,
-      locked: false,
+      renderVisible: true,
+      viewportVisible: true,
       keyframes: [],
     };
 
@@ -415,8 +417,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
       layers.push({
         id: layerDef.id,
-        visible: true,
-        locked: false,
+        renderVisible: layerDef.renderVisible !== false,
+        viewportVisible: layerDef.viewportVisible !== false,
         keyframes,
       });
     }
@@ -507,8 +509,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     const newLayer: AnimationLayer = {
       id,
-      visible: true,
-      locked: false,
+      renderVisible: true,
+      viewportVisible: true,
       keyframes: [],
     };
 
@@ -550,23 +552,23 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     get().recomposite();
   },
 
-  toggleLayerVisibility: (id: string) => {
+  toggleRenderVisible: (id: string) => {
     pushUndo();
     set((s) => ({
       layers: s.layers.map((l) =>
-        l.id === id ? { ...l, visible: !l.visible } : l
+        l.id === id ? { ...l, renderVisible: !l.renderVisible } : l
+      ),
+    }));
+  },
+
+  toggleViewportVisible: (id: string) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, viewportVisible: !l.viewportVisible } : l
       ),
     }));
     get().recomposite();
-  },
-
-  toggleLayerLocked: (id: string) => {
-    pushUndo();
-    set((s) => ({
-      layers: s.layers.map((l) =>
-        l.id === id ? { ...l, locked: !l.locked } : l
-      ),
-    }));
   },
 
   selectLayer: (id: string | null) => {
@@ -841,7 +843,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     const contextRefs: { id: string; filePath: string }[] = [];
     for (const otherLayer of state.layers) {
-      if (otherLayer.id === layerId || !otherLayer.visible) continue;
+      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
 
       const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
       if (!nearestKf) continue;
