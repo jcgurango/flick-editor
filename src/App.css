@@ -707,3 +707,44 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* ===== Export Progress ===== */
+.export-progress {
+  margin-top: 12px;
+}
+
+.export-progress-bar {
+  height: 8px;
+  background: #1e1e1e;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.export-progress-fill {
+  height: 100%;
+  background: #4a7aff;
+  border-radius: 4px;
+  transition: width 0.1s ease;
+}
+
+.export-progress-text {
+  font-size: 11px;
+  color: #888;
+}
+
+.dialog-field select {
+  flex: 1;
+  max-width: 200px;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  color: #ccc;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.dialog-field select:focus {
+  outline: none;
+  border-color: #4a7aff;
+}
