@@ -101,12 +101,11 @@ export interface ProjectState {
   // ── Project lifecycle ─────────────────────────────────
 
   newProject: (params: {
-    folder: string;
+    projectDir: string;
     width: number;
     height: number;
     fps: number;
     totalFrames: number;
-    savePath: string;
   }) => Promise<void>;
 
   openProject: (projectDir: string) => Promise<void>;
@@ -308,9 +307,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   // ── Project lifecycle ───────────────────────────────────
 
-  newProject: async ({ folder, width, height, fps, totalFrames, savePath }) => {
+  newProject: async ({ projectDir, width, height, fps, totalFrames }) => {
     const api = window.api;
-    const projectDir = await api.pathJoin(savePath, folder);
 
     await api.mkdir(projectDir);
     await api.mkdir(await api.pathJoin(projectDir, 'layers'));

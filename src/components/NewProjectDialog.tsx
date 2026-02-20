@@ -6,7 +6,6 @@ interface NewProjectDialogProps {
 }
 
 export function NewProjectDialog({ onClose }: NewProjectDialogProps) {
-  const [folder, setFolder] = useState('my-animation');
   const [width, setWidth] = useState(1920);
   const [height, setHeight] = useState(1080);
   const [fps, setFps] = useState(24);
@@ -16,22 +15,21 @@ export function NewProjectDialog({ onClose }: NewProjectDialogProps) {
   const newProject = useProjectStore((s) => s.newProject);
 
   const handleCreate = async () => {
-    // Ask user where to save
+    // Ask user to pick or create the project folder directly
     const result = await window.api.showOpenDialog({
-      title: 'Choose save location',
-      properties: ['openDirectory'],
+      title: 'Choose project folder',
+      properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || result.filePaths.length === 0) return;
 
     setSaving(true);
     try {
       await newProject({
-        folder,
+        projectDir: result.filePaths[0],
         width,
         height,
         fps,
         totalFrames: frames,
-        savePath: result.filePaths[0],
       });
       onClose();
     } finally {
@@ -44,15 +42,6 @@ export function NewProjectDialog({ onClose }: NewProjectDialogProps) {
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-title">New Project</div>
         <div className="dialog-body">
-          <div className="dialog-field">
-            <label>Folder</label>
-            <input
-              type="text"
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              autoFocus
-            />
-          </div>
           <div className="dialog-field">
             <label>Width</label>
             <input
@@ -91,7 +80,7 @@ export function NewProjectDialog({ onClose }: NewProjectDialogProps) {
           <button
             className="dialog-btn dialog-btn-primary"
             onClick={handleCreate}
-            disabled={saving || !folder.trim()}
+            disabled={saving}
           >
             {saving ? 'Creating...' : 'Create'}
           </button>
