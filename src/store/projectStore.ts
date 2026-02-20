@@ -1,10 +1,17 @@
 import { create } from 'zustand';
+import { compositeFrame } from '../lib/compositor';
 
 // ── Data Model ────────────────────────────────────────────
+
+export type TweenType = 'discrete' | 'linear' | 'quadratic' | 'cubic'
+  | 'exponential' | 'circular' | 'elastic' | 'bounce';
+export type EasingDirection = 'in' | 'out' | 'in-out';
 
 export interface Keyframe {
   frame: number;        // 0-indexed, matches kf_NNN.svg
   svgContent: string;   // Full SVG loaded in memory
+  tween: TweenType;
+  easing: EasingDirection;
 }
 
 export interface AnimationLayer {
@@ -28,9 +35,16 @@ export interface TimelineSelection {
   endFrame: number;
 }
 
-/** Clipboard: 2D grid of SVG content (or null for empty cells) */
+/** Clipboard cell: SVG content plus tween/easing metadata */
+export interface ClipboardCell {
+  svgContent: string;
+  tween: TweenType;
+  easing: EasingDirection;
+}
+
+/** Clipboard: 2D grid of keyframe data (or null for empty cells) */
 export interface ClipboardContent {
-  cells: (string | null)[][]; // [layerOffset][frameOffset]
+  cells: (ClipboardCell | null)[][]; // [layerOffset][frameOffset]
   layerCount: number;
   frameCount: number;
 }
@@ -111,6 +125,8 @@ export interface ProjectState {
 
   addKeyframe: (layerId: string, frame: number, fromReference?: boolean) => Promise<void>;
   removeKeyframe: (layerId: string, frame: number) => void;
+  setKeyframeTween: (layerId: string, frame: number, tween: TweenType) => void;
+  setKeyframeEasing: (layerId: string, frame: number, easing: EasingDirection) => void;
 
   // ── Selection / Clipboard ─────────────────────────────
 
@@ -144,6 +160,12 @@ export interface ProjectState {
 
   undo: () => void;
   redo: () => void;
+
+  // ── Playback ────────────────────────────────────────
+
+  playing: boolean;
+  play: () => void;
+  stop: () => void;
 
   // ── Compositor ────────────────────────────────────────
 
@@ -190,7 +212,14 @@ function buildProjectJson(state: {
     frames: String(state.totalFrames),
     width: String(state.width),
     height: String(state.height),
-    layers: state.layers.map((l) => ({ id: l.id })),
+    layers: state.layers.map((l) => ({
+      id: l.id,
+      keyframes: l.keyframes.map((kf) => ({
+        frame: kf.frame,
+        tween: kf.tween,
+        easing: kf.easing,
+      })),
+    })),
   }, null, 2);
 }
 
@@ -240,6 +269,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   redoStack: [],
   canUndo: false,
   canRedo: false,
+
+  playing: false,
 
   // ── Undo / Redo ─────────────────────────────────────────
 
@@ -331,17 +362,39 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const width = Number(proj.width);
     const height = Number(proj.height);
 
+    // Build lookup for keyframe metadata from project.json
+    const kfMetaMap = new Map<string, Map<number, { tween: TweenType; easing: EasingDirection }>>();
+    for (const layerDef of proj.layers) {
+      const frameMeta = new Map<number, { tween: TweenType; easing: EasingDirection }>();
+      if (Array.isArray(layerDef.keyframes)) {
+        for (const km of layerDef.keyframes) {
+          frameMeta.set(km.frame, {
+            tween: km.tween || 'linear',
+            easing: km.easing || 'in-out',
+          });
+        }
+      }
+      kfMetaMap.set(layerDef.id, frameMeta);
+    }
+
     const layers: AnimationLayer[] = [];
     for (const layerDef of proj.layers) {
       const layerDir = await api.pathJoin(projectDir, 'layers', layerDef.id);
       const files = await api.readdir(layerDir);
+      const meta = kfMetaMap.get(layerDef.id);
 
       const keyframes: Keyframe[] = [];
       for (const file of files.sort()) {
         if (!file.startsWith('kf_') || !file.endsWith('.svg')) continue;
         const frameNum = parseInt(file.replace('kf_', '').replace('.svg', ''), 10);
         const svgContent = await api.readFile(await api.pathJoin(layerDir, file));
-        keyframes.push({ frame: frameNum, svgContent });
+        const m = meta?.get(frameNum);
+        keyframes.push({
+          frame: frameNum,
+          svgContent,
+          tween: m?.tween ?? 'linear',
+          easing: m?.easing ?? 'in-out',
+        });
       }
 
       layers.push({
@@ -533,7 +586,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     set((s) => ({
       layers: s.layers.map((l) => {
         if (l.id !== layerId) return l;
-        const newKeyframes = [...l.keyframes, { frame, svgContent }]
+        const newKeyframes = [...l.keyframes, { frame, svgContent, tween: 'linear' as TweenType, easing: 'in-out' as EasingDirection }]
           .sort((a, b) => a.frame - b.frame);
         return { ...l, keyframes: newKeyframes };
       }),
@@ -550,6 +603,38 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         return {
           ...l,
           keyframes: l.keyframes.filter((kf) => kf.frame !== frame),
+        };
+      }),
+    }));
+    get().recomposite();
+  },
+
+  setKeyframeTween: (layerId: string, frame: number, tween: TweenType) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        return {
+          ...l,
+          keyframes: l.keyframes.map((kf) =>
+            kf.frame === frame ? { ...kf, tween } : kf
+          ),
+        };
+      }),
+    }));
+    get().recomposite();
+  },
+
+  setKeyframeEasing: (layerId: string, frame: number, easing: EasingDirection) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        return {
+          ...l,
+          keyframes: l.keyframes.map((kf) =>
+            kf.frame === frame ? { ...kf, easing } : kf
+          ),
         };
       }),
     }));
@@ -618,14 +703,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const layerCount = rect.maxLayerIdx - rect.minLayerIdx + 1;
     const frameCount = rect.maxFrame - rect.minFrame + 1;
 
-    const cells: (string | null)[][] = [];
+    const cells: (ClipboardCell | null)[][] = [];
     for (let li = 0; li < layerCount; li++) {
       const layer = layers[rect.minLayerIdx + li];
-      const row: (string | null)[] = [];
+      const row: (ClipboardCell | null)[] = [];
       for (let fi = 0; fi < frameCount; fi++) {
         const frame = rect.minFrame + fi;
         const kf = layer?.keyframes.find((k) => k.frame === frame);
-        row.push(kf ? kf.svgContent : null);
+        row.push(kf ? { svgContent: kf.svgContent, tween: kf.tween, easing: kf.easing } : null);
       }
       cells.push(row);
     }
@@ -655,13 +740,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           const targetFrame = startFrame + fi;
           if (targetFrame >= totalFrames) break;
 
-          const content = clipRow[fi];
-          if (content === null) continue;
+          const cell = clipRow[fi];
+          if (cell === null) continue;
 
           // Remove existing keyframe at target frame if any
           newKeyframes = newKeyframes.filter((kf) => kf.frame !== targetFrame);
-          // Add the pasted keyframe
-          newKeyframes.push({ frame: targetFrame, svgContent: content });
+          // Add the pasted keyframe with tween/easing from clipboard
+          newKeyframes.push({
+            frame: targetFrame,
+            svgContent: cell.svgContent,
+            tween: cell.tween,
+            easing: cell.easing,
+          });
         }
 
         newKeyframes.sort((a, b) => a.frame - b.frame);
@@ -721,6 +811,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     const kf = layer.keyframes.find((k) => k.frame === frame);
     if (!kf) return;
+
+    // Stop playback before editing
+    if (state.playing) get().stop();
 
     if (state.editingKeyframe) {
       await get().stopEditing();
@@ -859,6 +952,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   // ── Timeline / Canvas ───────────────────────────────────
 
   setCurrentFrame: (frame: number) => {
+    if (get().playing) get().stop();
     set({ currentFrame: frame });
     get().recomposite();
   },
@@ -885,27 +979,39 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   setFps: (fps: number) => set({ fps, dirty: true }),
   setTotalFrames: (totalFrames: number) => set({ totalFrames, dirty: true }),
 
-  // ── Compositor (nearest-keyframe fallback — interpolation added later) ──
+  // ── Playback ────────────────────────────────────────────
+
+  play: () => {
+    const { editingKeyframe, playing } = get();
+    if (editingKeyframe || playing) return;
+    set({ playing: true });
+
+    let lastTime = performance.now();
+    const tick = (now: number) => {
+      const state = get();
+      if (!state.playing) return;
+      const elapsed = now - lastTime;
+      const frameDuration = 1000 / state.fps;
+      if (elapsed >= frameDuration) {
+        lastTime = now - (elapsed % frameDuration);
+        const nextFrame = (state.currentFrame + 1) % state.totalFrames;
+        set({ currentFrame: nextFrame });
+        state.recomposite();
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  },
+
+  stop: () => {
+    set({ playing: false });
+  },
+
+  // ── Compositor ──────────────────────────────────────────
 
   recomposite: () => {
-    const state = get();
-    const { layers, currentFrame } = state;
-
-    let combined = '';
-
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const layer = layers[i];
-      if (!layer.visible || layer.keyframes.length === 0) continue;
-
-      const nearest = findNearestKeyframe(layer.keyframes, currentFrame);
-      if (!nearest) continue;
-
-      const inner = extractSvgInnerContent(nearest.svgContent);
-      if (inner) {
-        combined += `<g data-layer="${layer.id}">${inner}</g>\n`;
-      }
-    }
-
+    const { layers, currentFrame, width, height } = get();
+    const combined = compositeFrame(layers, currentFrame, width, height);
     set({ compositedSvg: combined });
   },
 };

@@ -20,6 +20,9 @@ export function Timeline() {
   const commitSelection = useProjectStore((s) => s.commitSelection);
   const selectLayer = useProjectStore((s) => s.selectLayer);
   const moveLayer = useProjectStore((s) => s.moveLayer);
+  const playing = useProjectStore((s) => s.playing);
+  const play = useProjectStore((s) => s.play);
+  const stop = useProjectStore((s) => s.stop);
 
   const isEditing = editing !== null;
   const isScrubbing = useRef(false);
@@ -60,6 +63,7 @@ export function Timeline() {
 
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if (isEditing) return;
+    if (playing) stop();
     isScrubbing.current = true;
     const frame = frameFromHeaderEvent(e);
     if (frame >= 0) setCurrentFrame(frame);
@@ -76,7 +80,7 @@ export function Timeline() {
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [isEditing, frameFromHeaderEvent, setCurrentFrame]);
+  }, [isEditing, playing, stop, frameFromHeaderEvent, setCurrentFrame]);
 
   // ── Cell selection drag ────────────────────────────────
 
@@ -337,6 +341,14 @@ export function Timeline() {
         )}
       </div>
       <div className="timeline-footer">
+        <button
+          className="playback-btn"
+          onClick={() => playing ? stop() : play()}
+          disabled={isEditing}
+          title={playing ? 'Pause (Space)' : 'Play (Space)'}
+        >
+          {playing ? '\u23F8' : '\u25B6'}
+        </button>
         <span className="timeline-frame-display">
           Frame: {currentFrame + 1} / {totalFrames}
         </span>

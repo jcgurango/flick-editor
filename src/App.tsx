@@ -17,6 +17,8 @@ function App() {
   const resetCanvasView = useProjectStore((s) => s.resetCanvasView);
   const setCanvasZoom100 = useProjectStore((s) => s.setCanvasZoom100);
   const addKeyframe = useProjectStore((s) => s.addKeyframe);
+  const play = useProjectStore((s) => s.play);
+  const stop = useProjectStore((s) => s.stop);
   const projectPath = useProjectStore((s) => s.projectPath);
   const dirty = useProjectStore((s) => s.dirty);
 
@@ -42,6 +44,18 @@ function App() {
       }
 
       if (isEditing()) return;
+
+      // Play/pause — Space (only when not focused on an input)
+      if (e.key === ' ' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        const state = useProjectStore.getState();
+        if (state.playing) {
+          stop();
+        } else {
+          play();
+        }
+        return;
+      }
 
       if (ctrl && key === 'z') {
         e.preventDefault();
@@ -98,7 +112,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, copySelection, pasteAtSelection, deleteSelection, removeLayer, saveProject, resetCanvasView, setCanvasZoom100, addKeyframe]);
+  }, [undo, redo, copySelection, pasteAtSelection, deleteSelection, removeLayer, saveProject, resetCanvasView, setCanvasZoom100, addKeyframe, play, stop]);
 
   return (
     <div className="app">
