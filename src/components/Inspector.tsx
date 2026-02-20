@@ -60,6 +60,8 @@ export function Inspector() {
   const setKeyframeEasing = useProjectStore((s) => s.setKeyframeEasing);
   const background = useProjectStore((s) => s.background);
   const setBackground = useProjectStore((s) => s.setBackground);
+  const setLayerClip = useProjectStore((s) => s.setLayerClip);
+  const setLayerMask = useProjectStore((s) => s.setLayerMask);
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
   const currentKeyframe = selectedLayer?.keyframes.find((kf) => kf.frame === currentFrame) ?? null;
@@ -154,7 +156,7 @@ export function Inspector() {
         </div>
       </div>
 
-      {selectedLayer && (
+      {selectedLayer && selectedLayerId && (
         <div className="inspector-section">
           <div className="inspector-section-title">Layer</div>
           <div className="inspector-field">
@@ -164,6 +166,32 @@ export function Inspector() {
           <div className="inspector-field">
             <label>Keyframes</label>
             <span className="inspector-value">{selectedLayer.keyframes.length}</span>
+          </div>
+          <div className="inspector-field">
+            <label>Clip</label>
+            <select
+              className="inspector-select"
+              value={selectedLayer.clipLayerId ?? ''}
+              onChange={(e) => setLayerClip(selectedLayerId, e.target.value || null)}
+            >
+              <option value="">None</option>
+              {layers.filter((l) => l.id !== selectedLayerId).map((l) => (
+                <option key={l.id} value={l.id}>{l.id}</option>
+              ))}
+            </select>
+          </div>
+          <div className="inspector-field">
+            <label>Mask</label>
+            <select
+              className="inspector-select"
+              value={selectedLayer.maskLayerId ?? ''}
+              onChange={(e) => setLayerMask(selectedLayerId, e.target.value || null)}
+            >
+              <option value="">None</option>
+              {layers.filter((l) => l.id !== selectedLayerId).map((l) => (
+                <option key={l.id} value={l.id}>{l.id}</option>
+              ))}
+            </select>
           </div>
         </div>
       )}

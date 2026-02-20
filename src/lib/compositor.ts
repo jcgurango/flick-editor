@@ -68,7 +68,9 @@ export function compositeFrame(
   _width: number,
   _height: number
 ): string {
+  let defs = '';
   let combined = '';
+  const layerMap = new Map(layers.map((l) => [l.id, l]));
 
   // Render layers in reverse order (bottom-up in z-order)
   for (let i = layers.length - 1; i >= 0; i--) {
@@ -76,10 +78,37 @@ export function compositeFrame(
     if (!layer.viewportVisible || layer.keyframes.length === 0) continue;
 
     const inner = renderLayer(layer, frame);
-    if (inner) {
-      combined += `<g data-layer="${layer.id}">${inner}</g>\n`;
+    if (!inner) continue;
+
+    // Build clip-path / mask defs if referenced
+    let attrs = '';
+
+    if (layer.clipLayerId) {
+      const clipLayer = layerMap.get(layer.clipLayerId);
+      if (clipLayer && clipLayer.keyframes.length > 0) {
+        const clipContent = renderLayer(clipLayer, frame);
+        if (clipContent) {
+          const clipId = `clip-${layer.id}`;
+          defs += `<clipPath id="${clipId}">${clipContent}</clipPath>\n`;
+          attrs += ` clip-path="url(#${clipId})"`;
+        }
+      }
     }
+
+    if (layer.maskLayerId) {
+      const maskLayer = layerMap.get(layer.maskLayerId);
+      if (maskLayer && maskLayer.keyframes.length > 0) {
+        const maskContent = renderLayer(maskLayer, frame);
+        if (maskContent) {
+          const maskId = `mask-${layer.id}`;
+          defs += `<mask id="${maskId}">${maskContent}</mask>\n`;
+          attrs += ` mask="url(#${maskId})"`;
+        }
+      }
+    }
+
+    combined += `<g data-layer="${layer.id}"${attrs}>${inner}</g>\n`;
   }
 
-  return combined;
+  return (defs ? `<defs>${defs}</defs>\n` : '') + combined;
 }
