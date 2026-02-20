@@ -1,6 +1,8 @@
-import type { AnimationLayer, Keyframe } from '../store/projectStore';
+import type { AnimationLayer, Keyframe, BackgroundSettings } from '../store/projectStore';
 import { interpolateSvg, extractSvgInnerContent } from './interpolation';
 import { getEasingFn } from './easing';
+
+export type CompositeMode = 'viewport' | 'render';
 
 /**
  * Find the surrounding keyframes for a given frame.
@@ -66,16 +68,19 @@ export function compositeFrame(
   layers: AnimationLayer[],
   frame: number,
   _width: number,
-  _height: number
+  _height: number,
+  mode: CompositeMode = 'viewport'
 ): string {
   let defs = '';
   let combined = '';
   const layerMap = new Map(layers.map((l) => [l.id, l]));
+  const isVisible = (l: AnimationLayer) =>
+    mode === 'render' ? l.renderVisible : l.viewportVisible;
 
   // Render layers in reverse order (bottom-up in z-order)
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i];
-    if (!layer.viewportVisible || layer.keyframes.length === 0) continue;
+    if (!isVisible(layer) || layer.keyframes.length === 0) continue;
 
     const inner = renderLayer(layer, frame);
     if (!inner) continue;
@@ -111,4 +116,32 @@ export function compositeFrame(
   }
 
   return (defs ? `<defs>${defs}</defs>\n` : '') + combined;
+}
+
+/**
+ * Export a single frame as a complete SVG string.
+ */
+export function exportFrame(
+  layers: AnimationLayer[],
+  frame: number,
+  width: number,
+  height: number,
+  background: BackgroundSettings | null,
+  exportWidth?: number,
+  exportHeight?: number,
+): string {
+  const w = exportWidth || width;
+  const h = exportHeight || height;
+  const inner = compositeFrame(layers, frame, width, height, 'render');
+
+  let bgContent = '';
+  if (background) {
+    if (background.type === 'solid') {
+      bgContent = `<rect width="${width}" height="${height}" fill="${background.color}"/>`;
+    } else if (background.type === 'image' && background.imageData) {
+      bgContent = `<rect width="${width}" height="${height}" fill="white"/><image href="${background.imageData}" width="${width}" height="${height}"/>`;
+    }
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${width} ${height}">\n${bgContent}${inner}</svg>`;
 }

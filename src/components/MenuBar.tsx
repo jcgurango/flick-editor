@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { NewProjectDialog } from './NewProjectDialog';
+import { ExportDialog } from './ExportDialog';
 
 interface MenuItemDef {
   label: string;
@@ -18,6 +19,7 @@ interface MenuDef {
 export function MenuBar() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const menuBarRef = useRef<HTMLDivElement>(null);
   const resetCanvasView = useProjectStore((s) => s.resetCanvasView);
   const setCanvasZoom100 = useProjectStore((s) => s.setCanvasZoom100);
@@ -78,6 +80,15 @@ export function MenuBar() {
         { label: 'Open...', action: handleOpen, disabled: isEditing },
         { separator: true, label: '' },
         { label: 'Save', action: handleSave, shortcut: 'Ctrl+S' },
+        { separator: true, label: '' },
+        {
+          label: 'Export...',
+          action: () => {
+            setOpenMenu(null);
+            setShowExport(true);
+          },
+          disabled: !projectPath || isEditing,
+        },
       ],
     },
     {
@@ -200,6 +211,9 @@ export function MenuBar() {
       </div>
       {showNewProject && (
         <NewProjectDialog onClose={() => setShowNewProject(false)} />
+      )}
+      {showExport && (
+        <ExportDialog onClose={() => setShowExport(false)} />
       )}
     </>
   );
