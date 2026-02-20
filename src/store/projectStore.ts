@@ -25,6 +25,8 @@ export interface AnimationLayer {
   id: string;
   renderVisible: boolean;   // included in export (camera)
   viewportVisible: boolean; // visible in editor (eye)
+  clipLayerId: string | null;  // layer used as clip-path (compositing only)
+  maskLayerId: string | null;  // layer used as mask (compositing only)
   keyframes: Keyframe[]; // Sorted by frame
 }
 
@@ -126,6 +128,8 @@ export interface ProjectState {
   moveLayer: (fromIdx: number, toIdx: number) => void;
   toggleRenderVisible: (id: string) => void;
   toggleViewportVisible: (id: string) => void;
+  setLayerClip: (id: string, clipLayerId: string | null) => void;
+  setLayerMask: (id: string, maskLayerId: string | null) => void;
   selectLayer: (id: string | null) => void;
 
   // ── Keyframe actions ──────────────────────────────────
@@ -226,6 +230,8 @@ function buildProjectJson(state: {
       id: l.id,
       renderVisible: l.renderVisible,
       viewportVisible: l.viewportVisible,
+      clipLayerId: l.clipLayerId,
+      maskLayerId: l.maskLayerId,
       keyframes: l.keyframes.map((kf) => ({
         frame: kf.frame,
         tween: kf.tween,
@@ -332,6 +338,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       id: 'layer-1',
       renderVisible: true,
       viewportVisible: true,
+      clipLayerId: null,
+      maskLayerId: null,
       keyframes: [],
     };
 
@@ -419,6 +427,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         id: layerDef.id,
         renderVisible: layerDef.renderVisible !== false,
         viewportVisible: layerDef.viewportVisible !== false,
+        clipLayerId: layerDef.clipLayerId || null,
+        maskLayerId: layerDef.maskLayerId || null,
         keyframes,
       });
     }
@@ -511,6 +521,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       id,
       renderVisible: true,
       viewportVisible: true,
+      clipLayerId: null,
+      maskLayerId: null,
       keyframes: [],
     };
 
@@ -566,6 +578,26 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     set((s) => ({
       layers: s.layers.map((l) =>
         l.id === id ? { ...l, viewportVisible: !l.viewportVisible } : l
+      ),
+    }));
+    get().recomposite();
+  },
+
+  setLayerClip: (id: string, clipLayerId: string | null) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, clipLayerId } : l
+      ),
+    }));
+    get().recomposite();
+  },
+
+  setLayerMask: (id: string, maskLayerId: string | null) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, maskLayerId } : l
       ),
     }));
     get().recomposite();
