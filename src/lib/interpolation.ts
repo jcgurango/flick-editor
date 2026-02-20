@@ -1,5 +1,25 @@
 import { interpolate } from 'd3-interpolate';
 
+/** Inject missing namespace declarations so DOMParser's strict XML mode doesn't choke */
+const NS_DECLS: [string, string][] = [
+  ['inkscape', 'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'],
+  ['sodipodi', 'xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"'],
+  ['xlink', 'xmlns:xlink="http://www.w3.org/1999/xlink"'],
+];
+
+function ensureNamespaces(svg: string): string {
+  const tagMatch = svg.match(/<svg[^>]*>/);
+  if (!tagMatch) return svg;
+  const svgTag = tagMatch[0];
+  let patched = svgTag;
+  for (const [prefix, decl] of NS_DECLS) {
+    if (svg.includes(`${prefix}:`) && !svgTag.includes(`xmlns:${prefix}`)) {
+      patched = patched.replace('>', ` ${decl}>`);
+    }
+  }
+  return patched === svgTag ? svg : svg.replace(svgTag, patched);
+}
+
 /**
  * Interpolate between two SVG strings at parameter t (0..1).
  *
@@ -13,8 +33,8 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   const parser = new DOMParser();
   const serializer = new XMLSerializer();
 
-  const docA = parser.parseFromString(svgA, 'image/svg+xml');
-  const docB = parser.parseFromString(svgB, 'image/svg+xml');
+  const docA = parser.parseFromString(ensureNamespaces(svgA), 'image/svg+xml');
+  const docB = parser.parseFromString(ensureNamespaces(svgB), 'image/svg+xml');
 
   const rootA = docA.documentElement;
   const rootB = docB.documentElement;
@@ -30,7 +50,6 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
     output.setAttribute(attr.name, attr.value);
   }
 
-  const allIds = new Set([...mapA.keys(), ...mapB.keys()]);
   const processedIds = new Set<string>();
 
   // Process matched elements (present in both A and B)
@@ -45,7 +64,14 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
     output.appendChild(clone);
   }
 
-  return serializer.serializeToString(output);
+  // Serialize children individually so each carries its own namespace
+  // declarations — avoids losing them when the caller embeds the result
+  // inside a parent <g> or <svg>.
+  let result = '';
+  for (const child of Array.from(output.childNodes)) {
+    result += serializer.serializeToString(child);
+  }
+  return result;
 }
 
 function collectElementsById(root: Element): Map<string, Element> {

@@ -55,8 +55,7 @@ function renderLayer(layer: AnimationLayer, frame: number): string {
   const easeFn = getEasingFn(before.tween, before.easing);
   const t = easeFn(linearT);
 
-  const interpolated = interpolateSvg(before.svgContent, after.svgContent, t);
-  return extractSvgInnerContent(interpolated);
+  return interpolateSvg(before.svgContent, after.svgContent, t);
 }
 
 /**

@@ -948,13 +948,21 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       ''
     );
 
+    // Preserve root-level <defs> (gradients, filters, clip-paths, etc.)
+    const defsBlocks: string[] = [];
+    cleaned.replace(/<defs[\s>][\s\S]*?<\/defs>/gi, (match) => {
+      defsBlocks.push(match);
+      return '';
+    });
+    const defsContent = defsBlocks.length > 0 ? defsBlocks.join('\n') + '\n' : '';
+
     const layerMatch = cleaned.match(
       /<g[^>]*inkscape:groupmode="layer"[^>]*>([\s\S]*?)<\/g>/
     );
 
     const innerContent = layerMatch ? layerMatch[1].trim() : extractSvgInnerContent(cleaned);
 
-    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${innerContent}\n</svg>`;
+    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsContent}${innerContent}\n</svg>`;
 
     const kfPath = await api.pathJoin(
       state.projectPath, 'layers', layerId, frameToFilename(frame)
