@@ -7,6 +7,13 @@ export type TweenType = 'discrete' | 'linear' | 'quadratic' | 'cubic'
   | 'exponential' | 'circular' | 'elastic' | 'bounce';
 export type EasingDirection = 'in' | 'out' | 'in-out';
 
+export type BackgroundType = 'none' | 'solid' | 'image';
+export interface BackgroundSettings {
+  type: BackgroundType;
+  color: string;       // hex, used when type === 'solid'
+  imageData: string;   // data URL, used when type === 'image'
+}
+
 export interface Keyframe {
   frame: number;        // 0-indexed, matches kf_NNN.svg
   svgContent: string;   // Full SVG loaded in memory
@@ -69,6 +76,7 @@ export interface ProjectState {
   height: number;
   fps: number;
   totalFrames: number;
+  background: BackgroundSettings;
 
   // Timeline
   layers: AnimationLayer[];
@@ -154,6 +162,7 @@ export interface ProjectState {
   setProjectDimensions: (width: number, height: number) => void;
   setFps: (fps: number) => void;
   setTotalFrames: (totalFrames: number) => void;
+  setBackground: (bg: Partial<BackgroundSettings>) => void;
 
   // ── Undo/Redo ─────────────────────────────────────────
 
@@ -205,12 +214,14 @@ function buildProjectJson(state: {
   width: number;
   height: number;
   layers: AnimationLayer[];
+  background: BackgroundSettings;
 }): string {
   return JSON.stringify({
     fps: String(state.fps),
     frames: String(state.totalFrames),
     width: String(state.width),
     height: String(state.height),
+    background: state.background,
     layers: state.layers.map((l) => ({
       id: l.id,
       keyframes: l.keyframes.map((kf) => ({
@@ -247,6 +258,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   height: 1080,
   fps: 24,
   totalFrames: 60,
+  background: { type: 'none', color: '#ffffff', imageData: '' },
 
   layers: [],
   selectedLayerId: null,
@@ -330,6 +342,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       height,
       fps,
       totalFrames,
+      background: { type: 'none', color: '#ffffff', imageData: '' },
       layers: [initialLayer],
       selectedLayerId: initialLayer.id,
       currentFrame: 0,
@@ -359,6 +372,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     const width = Number(proj.width);
     const height = Number(proj.height);
+
+    // Read background settings (backward-compatible default)
+    const background: BackgroundSettings = proj.background
+      ? { type: proj.background.type || 'none', color: proj.background.color || '#ffffff', imageData: proj.background.imageData || '' }
+      : { type: 'none', color: '#ffffff', imageData: '' };
 
     // Build lookup for keyframe metadata from project.json
     const kfMetaMap = new Map<string, Map<number, { tween: TweenType; easing: EasingDirection }>>();
@@ -410,6 +428,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       height,
       fps: Number(proj.fps),
       totalFrames: Number(proj.frames),
+      background,
       layers,
       selectedLayerId: layers.length > 0 ? layers[0].id : null,
       currentFrame: 0,
@@ -835,6 +854,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const editableContent = extractSvgInnerContent(kf.svgContent);
 
     let contextLayers = '';
+
+    // Background context layer (bottommost)
+    if (state.background.type === 'solid') {
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <rect width="${state.width}" height="${state.height}" fill="${state.background.color}" />\n`;
+      contextLayers += `  </g>\n`;
+    } else if (state.background.type === 'image' && state.background.imageData) {
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
+      contextLayers += `  </g>\n`;
+    }
+
     for (const ctx of contextRefs) {
       const fileUri = ctx.filePath.replace(/\\/g, '/');
       contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${ctx.id}" sodipodi:insensitive="true">\n`;
@@ -845,7 +876,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
      width="${state.width}" height="${state.height}"
      viewBox="0 0 ${state.width} ${state.height}">
 ${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
@@ -976,6 +1007,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   setProjectDimensions: (width: number, height: number) => set({ width, height, dirty: true }),
   setFps: (fps: number) => set({ fps, dirty: true }),
   setTotalFrames: (totalFrames: number) => set({ totalFrames, dirty: true }),
+  setBackground: (bg: Partial<BackgroundSettings>) => set((s) => ({ background: { ...s.background, ...bg }, dirty: true })),
 
   // ── Playback ────────────────────────────────────────────
 

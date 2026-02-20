@@ -12,6 +12,7 @@ export function Canvas() {
   const panX = useProjectStore((s) => s.canvasPanX);
   const panY = useProjectStore((s) => s.canvasPanY);
   const compositedSvg = useProjectStore((s) => s.compositedSvg);
+  const background = useProjectStore((s) => s.background);
   const setCanvasZoom = useProjectStore((s) => s.setCanvasZoom);
   const setCanvasPan = useProjectStore((s) => s.setCanvasPan);
   const setCanvasContainerSize = useProjectStore((s) => s.setCanvasContainerSize);
@@ -99,8 +100,23 @@ export function Canvas() {
           viewBox={`0 0 ${width} ${height}`}
           xmlns="http://www.w3.org/2000/svg"
         >
-          {/* White background for the canvas area */}
-          <rect width={width} height={height} fill="white" />
+          {/* Background */}
+          {background.type === 'none' && (
+            <rect width={width} height={height} fill="white" />
+          )}
+          {background.type === 'solid' && (
+            <rect width={width} height={height} fill={background.color} />
+          )}
+          {background.type === 'image' && background.imageData && (
+            <>
+              <rect width={width} height={height} fill="white" />
+              <image
+                href={background.imageData}
+                width={width}
+                height={height}
+              />
+            </>
+          )}
           {/* Render composited SVG content */}
           {compositedSvg && (
             <g dangerouslySetInnerHTML={{ __html: compositedSvg }} />
