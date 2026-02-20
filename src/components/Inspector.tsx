@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
+import type { TweenType, EasingDirection } from '../store/projectStore';
 
 /** Small inline numeric input that commits on blur or Enter */
 function NumField({ label, value, onChange, min }: {
@@ -54,8 +55,12 @@ export function Inspector() {
   const setProjectDimensions = useProjectStore((s) => s.setProjectDimensions);
   const setFps = useProjectStore((s) => s.setFps);
   const setTotalFrames = useProjectStore((s) => s.setTotalFrames);
+  const currentFrame = useProjectStore((s) => s.currentFrame);
+  const setKeyframeTween = useProjectStore((s) => s.setKeyframeTween);
+  const setKeyframeEasing = useProjectStore((s) => s.setKeyframeEasing);
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
+  const currentKeyframe = selectedLayer?.keyframes.find((kf) => kf.frame === currentFrame) ?? null;
 
   // Preferences
   const [inkscapePath, setInkscapePath] = useState<string>('');
@@ -106,6 +111,42 @@ export function Inspector() {
           <div className="inspector-field">
             <label>Keyframes</label>
             <span className="inspector-value">{selectedLayer.keyframes.length}</span>
+          </div>
+        </div>
+      )}
+
+      {selectedLayer && currentKeyframe && selectedLayerId && (
+        <div className="inspector-section">
+          <div className="inspector-section-title">Keyframe</div>
+          <div className="inspector-field">
+            <label>Tween</label>
+            <select
+              className="inspector-select"
+              value={currentKeyframe.tween}
+              onChange={(e) => setKeyframeTween(selectedLayerId, currentFrame, e.target.value as TweenType)}
+            >
+              <option value="discrete">Discrete</option>
+              <option value="linear">Linear</option>
+              <option value="quadratic">Quadratic</option>
+              <option value="cubic">Cubic</option>
+              <option value="exponential">Exponential</option>
+              <option value="circular">Circular</option>
+              <option value="elastic">Elastic</option>
+              <option value="bounce">Bounce</option>
+            </select>
+          </div>
+          <div className="inspector-field">
+            <label>Easing</label>
+            <select
+              className="inspector-select"
+              value={currentKeyframe.easing}
+              onChange={(e) => setKeyframeEasing(selectedLayerId, currentFrame, e.target.value as EasingDirection)}
+              disabled={currentKeyframe.tween === 'discrete' || currentKeyframe.tween === 'linear'}
+            >
+              <option value="in">In</option>
+              <option value="out">Out</option>
+              <option value="in-out">In-Out</option>
+            </select>
           </div>
         </div>
       )}

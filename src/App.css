@@ -405,6 +405,28 @@
   border-top: 1px solid #3a3a3a;
 }
 
+.playback-btn {
+  background: none;
+  border: 1px solid #555;
+  color: #ccc;
+  font-size: 12px;
+  padding: 1px 8px;
+  margin-right: 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.playback-btn:hover {
+  background: #444;
+  color: #fff;
+}
+
+.playback-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .timeline-frame-display {
   font-size: 11px;
   color: #888;
@@ -477,6 +499,26 @@
   font-family: monospace;
   font-size: 11px;
   color: #aaa;
+}
+
+.inspector-select {
+  width: 100px;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  color: #ccc;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.inspector-select:focus {
+  outline: none;
+  border-color: #4a7aff;
+}
+
+.inspector-select:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .inspector-stop-btn {

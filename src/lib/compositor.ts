@@ -1,5 +1,6 @@
 import type { AnimationLayer, Keyframe } from '../store/projectStore';
 import { interpolateSvg, extractSvgInnerContent } from './interpolation';
+import { getEasingFn } from './easing';
 
 /**
  * Find the surrounding keyframes for a given frame.
@@ -43,9 +44,16 @@ function renderLayer(layer: AnimationLayer, frame: number): string {
     return extractSvgInnerContent(before.svgContent);
   }
 
-  // Between two keyframes — interpolate
+  // Discrete tween — show before keyframe unchanged
+  if (before.tween === 'discrete') {
+    return extractSvgInnerContent(before.svgContent);
+  }
+
+  // Between two keyframes — interpolate with easing
   const range = after.frame - before.frame;
-  const t = (frame - before.frame) / range;
+  const linearT = (frame - before.frame) / range;
+  const easeFn = getEasingFn(before.tween, before.easing);
+  const t = easeFn(linearT);
 
   const interpolated = interpolateSvg(before.svgContent, after.svgContent, t);
   return extractSvgInnerContent(interpolated);
