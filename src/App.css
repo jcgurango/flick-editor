@@ -163,7 +163,7 @@
   flex-direction: column;
 }
 
-.timeline-panel.editing-locked {
+.timeline-body.editing-locked {
   opacity: 0.6;
   pointer-events: none;
 }
