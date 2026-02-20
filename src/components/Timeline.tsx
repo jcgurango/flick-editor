@@ -8,8 +8,8 @@ export function Timeline() {
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
   const addLayer = useProjectStore((s) => s.addLayer);
-  const toggleLayerVisibility = useProjectStore((s) => s.toggleLayerVisibility);
-  const toggleLayerLocked = useProjectStore((s) => s.toggleLayerLocked);
+  const toggleRenderVisible = useProjectStore((s) => s.toggleRenderVisible);
+  const toggleViewportVisible = useProjectStore((s) => s.toggleViewportVisible);
   const addKeyframe = useProjectStore((s) => s.addKeyframe);
   const startEditing = useProjectStore((s) => s.startEditing);
   const projectPath = useProjectStore((s) => s.projectPath);
@@ -296,20 +296,22 @@ export function Timeline() {
               onMouseDown={(e) => handleLayerInfoMouseDown(layerIdx, e)}
             >
               <button
-                className={`layer-btn ${layer.visible ? '' : 'off'}`}
-                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleLayerVisibility(layer.id); }}
-                title={layer.visible ? 'Hide' : 'Show'}
+                className="layer-btn layer-vis-btn"
+                style={{ opacity: layer.viewportVisible ? 1 : 0.3 }}
+                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleViewportVisible(layer.id); }}
+                title={layer.viewportVisible ? 'Hide in viewport' : 'Show in viewport'}
                 disabled={isEditing}
               >
-                {layer.visible ? '\u25C9' : '\u25CB'}
+                &#x1F441;
               </button>
               <button
-                className={`layer-btn ${layer.locked ? 'on' : ''}`}
-                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleLayerLocked(layer.id); }}
-                title={layer.locked ? 'Unlock' : 'Lock'}
+                className="layer-btn layer-vis-btn"
+                style={{ opacity: layer.renderVisible ? 1 : 0.3 }}
+                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleRenderVisible(layer.id); }}
+                title={layer.renderVisible ? 'Exclude from render' : 'Include in render'}
                 disabled={isEditing}
               >
-                {layer.locked ? '\u25A0' : '\u25A1'}
+                &#x1F3A5;
               </button>
               <span className="layer-name">{layer.id}</span>
             </div>
