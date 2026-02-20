@@ -1,0 +1,912 @@
+import { create } from 'zustand';
+
+// ── Data Model ────────────────────────────────────────────
+
+export interface Keyframe {
+  frame: number;        // 0-indexed, matches kf_NNN.svg
+  svgContent: string;   // Full SVG loaded in memory
+}
+
+export interface AnimationLayer {
+  id: string;
+  visible: boolean;
+  locked: boolean;
+  keyframes: Keyframe[]; // Sorted by frame
+}
+
+export interface EditingState {
+  layerId: string;
+  frame: number;
+  filePath: string;     // Path to the working SVG in .cache/edit/
+}
+
+/** Rectangular selection on the timeline grid */
+export interface TimelineSelection {
+  anchorLayerIdx: number;
+  anchorFrame: number;
+  endLayerIdx: number;
+  endFrame: number;
+}
+
+/** Clipboard: 2D grid of SVG content (or null for empty cells) */
+export interface ClipboardContent {
+  cells: (string | null)[][]; // [layerOffset][frameOffset]
+  layerCount: number;
+  frameCount: number;
+}
+
+/** Derive normalized rect from a selection */
+export function selectionRect(sel: TimelineSelection) {
+  return {
+    minLayerIdx: Math.min(sel.anchorLayerIdx, sel.endLayerIdx),
+    maxLayerIdx: Math.max(sel.anchorLayerIdx, sel.endLayerIdx),
+    minFrame: Math.min(sel.anchorFrame, sel.endFrame),
+    maxFrame: Math.max(sel.anchorFrame, sel.endFrame),
+  };
+}
+
+export interface ProjectState {
+  // Project metadata
+  projectPath: string | null;
+  dirty: boolean;
+
+  // Project settings
+  width: number;
+  height: number;
+  fps: number;
+  totalFrames: number;
+
+  // Timeline
+  layers: AnimationLayer[];
+  selectedLayerId: string | null;
+  currentFrame: number;  // 0-indexed internally
+
+  // Timeline selection
+  selection: TimelineSelection | null;
+  clipboard: ClipboardContent | null;
+
+  // Canvas view
+  canvasZoom: number;
+  canvasPanX: number;
+  canvasPanY: number;
+  canvasContainerWidth: number;
+  canvasContainerHeight: number;
+
+  // Composited SVG content for display
+  compositedSvg: string;
+
+  // Inkscape editing state
+  editingKeyframe: EditingState | null;
+
+  // Undo/redo
+  undoStack: AnimationLayer[][];
+  redoStack: AnimationLayer[][];
+  canUndo: boolean;
+  canRedo: boolean;
+
+  // ── Project lifecycle ─────────────────────────────────
+
+  newProject: (params: {
+    folder: string;
+    width: number;
+    height: number;
+    fps: number;
+    totalFrames: number;
+    savePath: string;
+  }) => Promise<void>;
+
+  openProject: (projectDir: string) => Promise<void>;
+  saveProject: () => Promise<void>;
+
+  // ── Layer actions ─────────────────────────────────────
+
+  addLayer: () => Promise<void>;
+  removeLayer: (id: string) => void;
+  moveLayer: (fromIdx: number, toIdx: number) => void;
+  toggleLayerVisibility: (id: string) => void;
+  toggleLayerLocked: (id: string) => void;
+  selectLayer: (id: string | null) => void;
+
+  // ── Keyframe actions ──────────────────────────────────
+
+  addKeyframe: (layerId: string, frame: number, fromReference?: boolean) => Promise<void>;
+  removeKeyframe: (layerId: string, frame: number) => void;
+
+  // ── Selection / Clipboard ─────────────────────────────
+
+  setSelectionAnchor: (layerIdx: number, frame: number) => void;
+  setSelectionEnd: (layerIdx: number, frame: number) => void;
+  commitSelection: () => void;
+  clearSelection: () => void;
+  copySelection: () => void;
+  pasteAtSelection: () => void;
+  deleteSelection: () => void;
+
+  // ── Inkscape editing ──────────────────────────────────
+
+  startEditing: (layerId: string, frame: number) => Promise<void>;
+  stopEditing: () => Promise<void>;
+  handleEditingFileChanged: () => Promise<void>;
+
+  // ── Timeline / Canvas ─────────────────────────────────
+
+  setCurrentFrame: (frame: number) => void;
+  setCanvasZoom: (zoom: number) => void;
+  setCanvasPan: (x: number, y: number) => void;
+  resetCanvasView: () => void;
+  setCanvasZoom100: () => void;
+  setCanvasContainerSize: (w: number, h: number) => void;
+  setProjectDimensions: (width: number, height: number) => void;
+  setFps: (fps: number) => void;
+  setTotalFrames: (totalFrames: number) => void;
+
+  // ── Undo/Redo ─────────────────────────────────────────
+
+  undo: () => void;
+  redo: () => void;
+
+  // ── Compositor ────────────────────────────────────────
+
+  recomposite: () => void;
+}
+
+// ── Helpers ───────────────────────────────────────────────
+
+const MAX_UNDO = 50;
+
+/** Find the nearest keyframe at or before the given frame */
+function findNearestKeyframe(keyframes: Keyframe[], frame: number): Keyframe | null {
+  let best: Keyframe | null = null;
+  for (const kf of keyframes) {
+    if (kf.frame <= frame) {
+      best = kf;
+    } else {
+      break; // keyframes are sorted
+    }
+  }
+  return best;
+}
+
+/** Format frame number as kf_NNN */
+function frameToFilename(frame: number): string {
+  return `kf_${String(frame).padStart(3, '0')}.svg`;
+}
+
+/** Create a blank SVG with the given dimensions */
+function blankSvg(width: number, height: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"></svg>`;
+}
+
+/** Build project.json content */
+function buildProjectJson(state: {
+  fps: number;
+  totalFrames: number;
+  width: number;
+  height: number;
+  layers: AnimationLayer[];
+}): string {
+  return JSON.stringify({
+    fps: String(state.fps),
+    frames: String(state.totalFrames),
+    width: String(state.width),
+    height: String(state.height),
+    layers: state.layers.map((l) => ({ id: l.id })),
+  }, null, 2);
+}
+
+/** Extract inner content from an SVG string (everything inside the root <svg> tag) */
+function extractSvgInnerContent(svgString: string): string {
+  const match = svgString.match(/<svg[^>]*>([\s\S]*)<\/svg>/i);
+  return match ? match[1].trim() : '';
+}
+
+// ── Store ─────────────────────────────────────────────────
+
+export const useProjectStore = create<ProjectState>((set, get) => {
+
+  /** Snapshot current layers onto the undo stack, clear redo */
+  function pushUndo() {
+    const { layers, undoStack } = get();
+    const newStack = [...undoStack, layers].slice(-MAX_UNDO);
+    set({ undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true });
+  }
+
+  return {
+  projectPath: null,
+  dirty: false,
+
+  width: 1920,
+  height: 1080,
+  fps: 24,
+  totalFrames: 60,
+
+  layers: [],
+  selectedLayerId: null,
+  currentFrame: 0,
+
+  selection: null,
+  clipboard: null,
+
+  canvasZoom: 1,
+  canvasPanX: 0,
+  canvasPanY: 0,
+  canvasContainerWidth: 0,
+  canvasContainerHeight: 0,
+
+  compositedSvg: '',
+  editingKeyframe: null,
+
+  undoStack: [],
+  redoStack: [],
+  canUndo: false,
+  canRedo: false,
+
+  // ── Undo / Redo ─────────────────────────────────────────
+
+  undo: () => {
+    const { undoStack, layers } = get();
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    const newUndoStack = undoStack.slice(0, -1);
+    set((s) => ({
+      layers: prev,
+      undoStack: newUndoStack,
+      redoStack: [...s.redoStack, layers],
+      canUndo: newUndoStack.length > 0,
+      canRedo: true,
+      dirty: true,
+    }));
+    get().recomposite();
+  },
+
+  redo: () => {
+    const { redoStack, layers } = get();
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    const newRedoStack = redoStack.slice(0, -1);
+    set((s) => ({
+      layers: next,
+      undoStack: [...s.undoStack, layers],
+      redoStack: newRedoStack,
+      canUndo: true,
+      canRedo: newRedoStack.length > 0,
+      dirty: true,
+    }));
+    get().recomposite();
+  },
+
+  // ── Project lifecycle ───────────────────────────────────
+
+  newProject: async ({ folder, width, height, fps, totalFrames, savePath }) => {
+    const api = window.api;
+    const projectDir = await api.pathJoin(savePath, folder);
+
+    await api.mkdir(projectDir);
+    await api.mkdir(await api.pathJoin(projectDir, 'layers'));
+    await api.mkdir(await api.pathJoin(projectDir, '.cache'));
+
+    const initialLayer: AnimationLayer = {
+      id: 'layer-1',
+      visible: true,
+      locked: false,
+      keyframes: [],
+    };
+
+    await api.mkdir(await api.pathJoin(projectDir, 'layers', initialLayer.id));
+
+    set({
+      projectPath: projectDir,
+      dirty: false,
+      width,
+      height,
+      fps,
+      totalFrames,
+      layers: [initialLayer],
+      selectedLayerId: initialLayer.id,
+      currentFrame: 0,
+      compositedSvg: '',
+      editingKeyframe: null,
+      selection: null,
+      clipboard: null,
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+
+    const state = get();
+    await api.writeFile(
+      await api.pathJoin(projectDir, 'project.json'),
+      buildProjectJson(state)
+    );
+  },
+
+  openProject: async (projectDir: string) => {
+    const api = window.api;
+
+    const jsonPath = await api.pathJoin(projectDir, 'project.json');
+    const raw = await api.readFile(jsonPath);
+    const proj = JSON.parse(raw);
+
+    const width = Number(proj.width);
+    const height = Number(proj.height);
+
+    const layers: AnimationLayer[] = [];
+    for (const layerDef of proj.layers) {
+      const layerDir = await api.pathJoin(projectDir, 'layers', layerDef.id);
+      const files = await api.readdir(layerDir);
+
+      const keyframes: Keyframe[] = [];
+      for (const file of files.sort()) {
+        if (!file.startsWith('kf_') || !file.endsWith('.svg')) continue;
+        const frameNum = parseInt(file.replace('kf_', '').replace('.svg', ''), 10);
+        const svgContent = await api.readFile(await api.pathJoin(layerDir, file));
+        keyframes.push({ frame: frameNum, svgContent });
+      }
+
+      layers.push({
+        id: layerDef.id,
+        visible: true,
+        locked: false,
+        keyframes,
+      });
+    }
+
+    set({
+      projectPath: projectDir,
+      dirty: false,
+      width,
+      height,
+      fps: Number(proj.fps),
+      totalFrames: Number(proj.frames),
+      layers,
+      selectedLayerId: layers.length > 0 ? layers[0].id : null,
+      currentFrame: 0,
+      compositedSvg: '',
+      editingKeyframe: null,
+      selection: null,
+      clipboard: null,
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+
+    get().recomposite();
+  },
+
+  saveProject: async () => {
+    const state = get();
+    if (!state.projectPath) return;
+    const api = window.api;
+
+    await api.writeFile(
+      await api.pathJoin(state.projectPath, 'project.json'),
+      buildProjectJson(state)
+    );
+
+    const layersDir = await api.pathJoin(state.projectPath, 'layers');
+    const layerIdsOnDisk = await api.exists(layersDir) ? await api.readdir(layersDir) : [];
+    const activeLayerIds = new Set(state.layers.map((l) => l.id));
+
+    // Remove layer directories that no longer exist in state
+    for (const dirName of layerIdsOnDisk) {
+      if (!activeLayerIds.has(dirName)) {
+        await api.rmdir(await api.pathJoin(layersDir, dirName));
+      }
+    }
+
+    // Write active layers and clean up stale keyframe files
+    for (const layer of state.layers) {
+      const layerDir = await api.pathJoin(layersDir, layer.id);
+      await api.mkdir(layerDir);
+
+      const activeFiles = new Set(layer.keyframes.map((kf) => frameToFilename(kf.frame)));
+      const filesOnDisk = await api.readdir(layerDir);
+
+      // Remove keyframe files that no longer exist in state
+      for (const file of filesOnDisk) {
+        if (file.endsWith('.svg') && !activeFiles.has(file)) {
+          await api.rm(await api.pathJoin(layerDir, file));
+        }
+      }
+
+      // Write current keyframes
+      for (const kf of layer.keyframes) {
+        await api.writeFile(
+          await api.pathJoin(layerDir, frameToFilename(kf.frame)),
+          kf.svgContent
+        );
+      }
+    }
+
+    set({ dirty: false });
+  },
+
+  // ── Layer actions ───────────────────────────────────────
+
+  addLayer: async () => {
+    const state = get();
+    pushUndo();
+
+    let id = 'layer-1';
+    let counter = 1;
+    while (state.layers.some((l) => l.id === id)) {
+      id = `layer-${++counter}`;
+    }
+
+    const newLayer: AnimationLayer = {
+      id,
+      visible: true,
+      locked: false,
+      keyframes: [],
+    };
+
+    if (state.projectPath) {
+      const api = window.api;
+      await api.mkdir(await api.pathJoin(state.projectPath, 'layers', id));
+    }
+
+    set((s) => ({
+      layers: [newLayer, ...s.layers],
+      selectedLayerId: id,
+    }));
+  },
+
+  removeLayer: (id: string) => {
+    pushUndo();
+    set((s) => {
+      const remaining = s.layers.filter((l) => l.id !== id);
+      return {
+        layers: remaining,
+        selectedLayerId: s.selectedLayerId === id
+          ? (remaining[0]?.id ?? null)
+          : s.selectedLayerId,
+        selection: null,
+      };
+    });
+    get().recomposite();
+  },
+
+  moveLayer: (fromIdx: number, toIdx: number) => {
+    if (fromIdx === toIdx) return;
+    pushUndo();
+    set((s) => {
+      const newLayers = [...s.layers];
+      const [moved] = newLayers.splice(fromIdx, 1);
+      newLayers.splice(toIdx, 0, moved);
+      return { layers: newLayers };
+    });
+    get().recomposite();
+  },
+
+  toggleLayerVisibility: (id: string) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, visible: !l.visible } : l
+      ),
+    }));
+    get().recomposite();
+  },
+
+  toggleLayerLocked: (id: string) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, locked: !l.locked } : l
+      ),
+    }));
+  },
+
+  selectLayer: (id: string | null) => {
+    set({ selectedLayerId: id, selection: null });
+  },
+
+  // ── Keyframe actions ────────────────────────────────────
+
+  addKeyframe: async (layerId: string, frame: number, fromReference = false) => {
+    const state = get();
+    const layer = state.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+
+    if (layer.keyframes.some((kf) => kf.frame === frame)) return;
+
+    pushUndo();
+
+    let svgContent: string;
+    if (fromReference) {
+      const nearest = findNearestKeyframe(layer.keyframes, frame);
+      svgContent = nearest ? nearest.svgContent : blankSvg(state.width, state.height);
+    } else {
+      svgContent = blankSvg(state.width, state.height);
+    }
+
+    if (state.projectPath) {
+      const api = window.api;
+      const filePath = await api.pathJoin(
+        state.projectPath, 'layers', layerId, frameToFilename(frame)
+      );
+      await api.writeFile(filePath, svgContent);
+    }
+
+    set((s) => ({
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        const newKeyframes = [...l.keyframes, { frame, svgContent }]
+          .sort((a, b) => a.frame - b.frame);
+        return { ...l, keyframes: newKeyframes };
+      }),
+    }));
+
+    get().recomposite();
+  },
+
+  removeKeyframe: (layerId: string, frame: number) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        return {
+          ...l,
+          keyframes: l.keyframes.filter((kf) => kf.frame !== frame),
+        };
+      }),
+    }));
+    get().recomposite();
+  },
+
+  // ── Selection / Clipboard ───────────────────────────────
+
+  setSelectionAnchor: (layerIdx: number, frame: number) => {
+    set({
+      selection: {
+        anchorLayerIdx: layerIdx,
+        anchorFrame: frame,
+        endLayerIdx: layerIdx,
+        endFrame: frame,
+      },
+    });
+  },
+
+  setSelectionEnd: (layerIdx: number, frame: number) => {
+    set((s) => {
+      if (!s.selection) return {};
+      return {
+        selection: {
+          ...s.selection,
+          endLayerIdx: layerIdx,
+          endFrame: frame,
+        },
+      };
+    });
+  },
+
+  commitSelection: () => {
+    const { selection, layers } = get();
+    if (!selection) return;
+
+    const rect = selectionRect(selection);
+    const isSingleCell =
+      rect.minLayerIdx === rect.maxLayerIdx &&
+      rect.minFrame === rect.maxFrame;
+
+    if (isSingleCell) {
+      // Single click: move scrubber and select that layer
+      set({
+        currentFrame: rect.minFrame,
+        selectedLayerId: layers[rect.minLayerIdx]?.id ?? null,
+      });
+      get().recomposite();
+    } else {
+      // Multi-select: set selectedLayerId to anchor layer, don't move scrubber
+      set({
+        selectedLayerId: layers[selection.anchorLayerIdx]?.id ?? null,
+      });
+    }
+  },
+
+  clearSelection: () => {
+    set({ selection: null });
+  },
+
+  copySelection: () => {
+    const { selection, layers } = get();
+    if (!selection) return;
+
+    const rect = selectionRect(selection);
+    const layerCount = rect.maxLayerIdx - rect.minLayerIdx + 1;
+    const frameCount = rect.maxFrame - rect.minFrame + 1;
+
+    const cells: (string | null)[][] = [];
+    for (let li = 0; li < layerCount; li++) {
+      const layer = layers[rect.minLayerIdx + li];
+      const row: (string | null)[] = [];
+      for (let fi = 0; fi < frameCount; fi++) {
+        const frame = rect.minFrame + fi;
+        const kf = layer?.keyframes.find((k) => k.frame === frame);
+        row.push(kf ? kf.svgContent : null);
+      }
+      cells.push(row);
+    }
+
+    set({ clipboard: { cells, layerCount, frameCount } });
+  },
+
+  pasteAtSelection: () => {
+    const { selection, clipboard, layers, totalFrames } = get();
+    if (!selection || !clipboard) return;
+
+    const rect = selectionRect(selection);
+    const startLayerIdx = rect.minLayerIdx;
+    const startFrame = rect.minFrame;
+
+    pushUndo();
+
+    set((s) => {
+      const newLayers = s.layers.map((layer, layerIdx) => {
+        const clipLayerOffset = layerIdx - startLayerIdx;
+        if (clipLayerOffset < 0 || clipLayerOffset >= clipboard.layerCount) return layer;
+
+        const clipRow = clipboard.cells[clipLayerOffset];
+        let newKeyframes = [...layer.keyframes];
+
+        for (let fi = 0; fi < clipboard.frameCount; fi++) {
+          const targetFrame = startFrame + fi;
+          if (targetFrame >= totalFrames) break;
+
+          const content = clipRow[fi];
+          if (content === null) continue;
+
+          // Remove existing keyframe at target frame if any
+          newKeyframes = newKeyframes.filter((kf) => kf.frame !== targetFrame);
+          // Add the pasted keyframe
+          newKeyframes.push({ frame: targetFrame, svgContent: content });
+        }
+
+        newKeyframes.sort((a, b) => a.frame - b.frame);
+        return { ...layer, keyframes: newKeyframes };
+      });
+
+      return { layers: newLayers };
+    });
+
+    get().recomposite();
+  },
+
+  deleteSelection: () => {
+    const { selection, layers } = get();
+    if (!selection) return;
+
+    const rect = selectionRect(selection);
+
+    // Check if there are any keyframes to delete in the selection
+    let hasAny = false;
+    for (let li = rect.minLayerIdx; li <= rect.maxLayerIdx; li++) {
+      const layer = layers[li];
+      if (!layer) continue;
+      if (layer.keyframes.some((kf) => kf.frame >= rect.minFrame && kf.frame <= rect.maxFrame)) {
+        hasAny = true;
+        break;
+      }
+    }
+    if (!hasAny) return;
+
+    pushUndo();
+
+    set((s) => ({
+      layers: s.layers.map((layer, idx) => {
+        if (idx < rect.minLayerIdx || idx > rect.maxLayerIdx) return layer;
+        return {
+          ...layer,
+          keyframes: layer.keyframes.filter(
+            (kf) => kf.frame < rect.minFrame || kf.frame > rect.maxFrame
+          ),
+        };
+      }),
+    }));
+
+    get().recomposite();
+  },
+
+  // ── Inkscape editing ────────────────────────────────────
+
+  startEditing: async (layerId: string, frame: number) => {
+    const state = get();
+    if (!state.projectPath) return;
+    const api = window.api;
+
+    const layer = state.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+
+    const kf = layer.keyframes.find((k) => k.frame === frame);
+    if (!kf) return;
+
+    if (state.editingKeyframe) {
+      await get().stopEditing();
+    }
+
+    const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
+    await api.mkdir(editDir);
+
+    const contextRefs: { id: string; filePath: string }[] = [];
+    for (const otherLayer of state.layers) {
+      if (otherLayer.id === layerId || !otherLayer.visible) continue;
+
+      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
+      if (!nearestKf) continue;
+
+      const ctxPath = await api.pathJoin(editDir, `context_${otherLayer.id}.svg`);
+      await api.writeFile(ctxPath, nearestKf.svgContent);
+      contextRefs.push({ id: otherLayer.id, filePath: ctxPath });
+    }
+
+    const editableContent = extractSvgInnerContent(kf.svgContent);
+
+    let contextLayers = '';
+    for (const ctx of contextRefs) {
+      const fileUri = ctx.filePath.replace(/\\/g, '/');
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${ctx.id}" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="file:///${fileUri}" width="${state.width}" height="${state.height}" />\n`;
+      contextLayers += `  </g>\n`;
+    }
+
+    const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.0.dtd"
+     width="${state.width}" height="${state.height}"
+     viewBox="0 0 ${state.width} ${state.height}">
+${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
+${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
+</svg>`;
+
+    const frameStr = String(frame).padStart(3, '0');
+    const workingPath = await api.pathJoin(editDir, `editing_${layerId}_kf${frameStr}.svg`);
+    await api.writeFile(workingPath, workingSvg);
+
+    await api.watchFile(workingPath);
+
+    const cleanup = api.onFileChanged((changedPath: string) => {
+      if (changedPath === workingPath) {
+        get().handleEditingFileChanged();
+      }
+    });
+
+    set({
+      editingKeyframe: {
+        layerId,
+        frame,
+        filePath: workingPath,
+      },
+    });
+
+    (get() as any)._editCleanup = cleanup;
+
+    const exitCleanup = api.onInkscapeExited(() => {
+      get().stopEditing();
+    });
+    (get() as any)._exitCleanup = exitCleanup;
+
+    try {
+      await api.spawnInkscape(workingPath);
+    } catch {
+      await get().stopEditing();
+    }
+  },
+
+  stopEditing: async () => {
+    const state = get();
+    if (!state.editingKeyframe) return;
+
+    const api = window.api;
+    await api.unwatchFile(state.editingKeyframe.filePath);
+
+    const cleanup = (state as any)._editCleanup;
+    if (cleanup) cleanup();
+
+    const exitCleanup = (state as any)._exitCleanup;
+    if (exitCleanup) exitCleanup();
+
+    set({ editingKeyframe: null });
+  },
+
+  handleEditingFileChanged: async () => {
+    const state = get();
+    if (!state.editingKeyframe || !state.projectPath) return;
+
+    const api = window.api;
+    const { layerId, frame, filePath } = state.editingKeyframe;
+
+    const workingSvg = await api.readFile(filePath);
+
+    let cleaned = workingSvg;
+    cleaned = cleaned.replace(
+      /<g[^>]*inkscape:label="\[ctx\][^"]*"[^>]*>[\s\S]*?<\/g>/g,
+      ''
+    );
+
+    const layerMatch = cleaned.match(
+      /<g[^>]*inkscape:groupmode="layer"[^>]*>([\s\S]*?)<\/g>/
+    );
+
+    const innerContent = layerMatch ? layerMatch[1].trim() : extractSvgInnerContent(cleaned);
+
+    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${innerContent}\n</svg>`;
+
+    const kfPath = await api.pathJoin(
+      state.projectPath, 'layers', layerId, frameToFilename(frame)
+    );
+    await api.writeFile(kfPath, cleanSvg);
+
+    pushUndo();
+
+    set((s) => ({
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        return {
+          ...l,
+          keyframes: l.keyframes.map((kf) =>
+            kf.frame === frame ? { ...kf, svgContent: cleanSvg } : kf
+          ),
+        };
+      }),
+    }));
+
+    get().recomposite();
+  },
+
+  // ── Timeline / Canvas ───────────────────────────────────
+
+  setCurrentFrame: (frame: number) => {
+    set({ currentFrame: frame });
+    get().recomposite();
+  },
+
+  setCanvasZoom: (zoom: number) => set({ canvasZoom: Math.max(0.1, Math.min(10, zoom)) }),
+  setCanvasPan: (x: number, y: number) => set({ canvasPanX: x, canvasPanY: y }),
+  resetCanvasView: () => {
+    const { width, height, canvasContainerWidth, canvasContainerHeight } = get();
+    if (canvasContainerWidth === 0 || canvasContainerHeight === 0) {
+      set({ canvasZoom: 1, canvasPanX: 0, canvasPanY: 0 });
+      return;
+    }
+    const padding = 40;
+    const zoom = Math.min(
+      (canvasContainerWidth - padding * 2) / width,
+      (canvasContainerHeight - padding * 2) / height,
+    );
+    set({ canvasZoom: Math.max(0.1, Math.min(10, zoom)), canvasPanX: 0, canvasPanY: 0 });
+  },
+  setCanvasZoom100: () => set({ canvasZoom: 1, canvasPanX: 0, canvasPanY: 0 }),
+  setCanvasContainerSize: (w: number, h: number) => set({ canvasContainerWidth: w, canvasContainerHeight: h }),
+
+  setProjectDimensions: (width: number, height: number) => set({ width, height, dirty: true }),
+  setFps: (fps: number) => set({ fps, dirty: true }),
+  setTotalFrames: (totalFrames: number) => set({ totalFrames, dirty: true }),
+
+  // ── Compositor (nearest-keyframe fallback — interpolation added later) ──
+
+  recomposite: () => {
+    const state = get();
+    const { layers, currentFrame } = state;
+
+    let combined = '';
+
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const layer = layers[i];
+      if (!layer.visible || layer.keyframes.length === 0) continue;
+
+      const nearest = findNearestKeyframe(layer.keyframes, currentFrame);
+      if (!nearest) continue;
+
+      const inner = extractSvgInnerContent(nearest.svgContent);
+      if (inner) {
+        combined += `<g data-layer="${layer.id}">${inner}</g>\n`;
+      }
+    }
+
+    set({ compositedSvg: combined });
+  },
+};
+});
