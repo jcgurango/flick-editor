@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import type { TweenType, EasingDirection } from '../store/projectStore';
+import type { TweenType, EasingDirection, BackgroundType } from '../store/projectStore';
 
 /** Small inline numeric input that commits on blur or Enter */
 function NumField({ label, value, onChange, min }: {
@@ -58,6 +58,8 @@ export function Inspector() {
   const currentFrame = useProjectStore((s) => s.currentFrame);
   const setKeyframeTween = useProjectStore((s) => s.setKeyframeTween);
   const setKeyframeEasing = useProjectStore((s) => s.setKeyframeEasing);
+  const background = useProjectStore((s) => s.background);
+  const setBackground = useProjectStore((s) => s.setBackground);
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
   const currentKeyframe = selectedLayer?.keyframes.find((kf) => kf.frame === currentFrame) ?? null;
@@ -70,6 +72,17 @@ export function Inspector() {
       setInkscapePath(val || '');
     });
   }, []);
+
+  const browseBackgroundImage = async () => {
+    const result = await window.api.showOpenDialog({
+      title: 'Choose background image',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'svg', 'webp', 'gif', 'bmp'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return;
+    const dataUrl = await window.api.readFileAsDataUrl(result.filePaths[0]);
+    setBackground({ imageData: dataUrl });
+  };
 
   const browseInkscape = async () => {
     const result = await window.api.showOpenDialog({
@@ -91,6 +104,46 @@ export function Inspector() {
         <NumField label="Height" value={height} onChange={(v) => setProjectDimensions(width, v)} min={1} />
         <NumField label="FPS" value={fps} onChange={setFps} min={1} />
         <NumField label="Frames" value={totalFrames} onChange={setTotalFrames} min={1} />
+      </div>
+
+      <div className="inspector-section">
+        <div className="inspector-section-title">Background</div>
+        <div className="inspector-field">
+          <label>Type</label>
+          <select
+            className="inspector-select"
+            value={background.type}
+            onChange={(e) => setBackground({ type: e.target.value as BackgroundType })}
+          >
+            <option value="none">None</option>
+            <option value="solid">Solid Color</option>
+            <option value="image">Image</option>
+          </select>
+        </div>
+        {background.type === 'solid' && (
+          <div className="inspector-field">
+            <label>Color</label>
+            <input
+              className="inspector-color"
+              type="color"
+              value={background.color}
+              onChange={(e) => setBackground({ color: e.target.value })}
+            />
+          </div>
+        )}
+        {background.type === 'image' && (
+          <div className="inspector-field-col">
+            <label>Image</label>
+            <div className="inspector-path-row">
+              <span className="inspector-path-value">
+                {background.imageData ? '(embedded)' : '(none)'}
+              </span>
+              <button className="inspector-browse-btn" onClick={browseBackgroundImage}>
+                ...
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="inspector-section">
