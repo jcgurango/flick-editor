@@ -29,7 +29,7 @@ function findSurroundingKeyframes(
  * Render a single layer at a given frame.
  * Returns the inner SVG content string, or empty string if no keyframes.
  */
-function renderLayer(layer: AnimationLayer, frame: number): string {
+export function renderLayer(layer: AnimationLayer, frame: number): string {
   if (layer.keyframes.length === 0) return '';
 
   const [before, after] = findSurroundingKeyframes(layer.keyframes, frame);
