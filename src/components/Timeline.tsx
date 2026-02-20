@@ -62,7 +62,6 @@ export function Timeline() {
   }, [totalFrames]);
 
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
-    if (isEditing) return;
     if (playing) stop();
     isScrubbing.current = true;
     const frame = frameFromHeaderEvent(e);
@@ -217,7 +216,7 @@ export function Timeline() {
   };
 
   return (
-    <div className={`timeline-panel ${isEditing ? 'editing-locked' : ''}`}>
+    <div className="timeline-panel">
       <div className="timeline-header">
         <div className="timeline-layers-header">
           <span>Layers</span>
@@ -271,7 +270,7 @@ export function Timeline() {
         </div>
       </div>
       <div
-        className="timeline-body"
+        className={`timeline-body${isEditing ? ' editing-locked' : ''}`}
         ref={bodyRef}
         onScroll={() => {
           if (bodyRef.current && headerRef.current) {
