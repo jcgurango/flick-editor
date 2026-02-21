@@ -27,6 +27,7 @@ export interface AnimationLayer {
   viewportVisible: boolean; // visible in editor (eye)
   clipLayerId: string | null;  // layer used as clip-path (compositing only)
   maskLayerId: string | null;  // layer used as mask (compositing only)
+  loop: boolean;             // wrap interpolation around totalFrames boundary
   keyframes: Keyframe[]; // Sorted by frame
 }
 
@@ -130,6 +131,7 @@ export interface ProjectState {
   toggleViewportVisible: (id: string) => void;
   setLayerClip: (id: string, clipLayerId: string | null) => void;
   setLayerMask: (id: string, maskLayerId: string | null) => void;
+  setLayerLoop: (id: string, loop: boolean) => void;
   selectLayer: (id: string | null) => void;
 
   // ── Keyframe actions ──────────────────────────────────
@@ -232,6 +234,7 @@ function buildProjectJson(state: {
       viewportVisible: l.viewportVisible,
       clipLayerId: l.clipLayerId,
       maskLayerId: l.maskLayerId,
+      loop: l.loop,
       keyframes: l.keyframes.map((kf) => ({
         frame: kf.frame,
         tween: kf.tween,
@@ -340,6 +343,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       viewportVisible: true,
       clipLayerId: null,
       maskLayerId: null,
+      loop: false,
       keyframes: [],
     };
 
@@ -429,6 +433,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         viewportVisible: layerDef.viewportVisible !== false,
         clipLayerId: layerDef.clipLayerId || null,
         maskLayerId: layerDef.maskLayerId || null,
+        loop: layerDef.loop === true,
         keyframes,
       });
     }
@@ -523,6 +528,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       viewportVisible: true,
       clipLayerId: null,
       maskLayerId: null,
+      loop: false,
       keyframes: [],
     };
 
@@ -603,6 +609,16 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     get().recomposite();
   },
 
+  setLayerLoop: (id: string, loop: boolean) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, loop } : l
+      ),
+    }));
+    get().recomposite();
+  },
+
   selectLayer: (id: string | null) => {
     set({ selectedLayerId: id, selection: null });
   },
@@ -620,7 +636,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     let svgContent: string;
     if (fromReference) {
-      const inner = renderLayer(layer, frame);
+      const inner = renderLayer(layer, frame, state.totalFrames);
       if (inner) {
         svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${inner}\n</svg>`;
       } else {
@@ -1086,8 +1102,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   // ── Compositor ──────────────────────────────────────────
 
   recomposite: () => {
-    const { layers, currentFrame, width, height } = get();
-    const combined = compositeFrame(layers, currentFrame, width, height);
+    const { layers, currentFrame, width, height, totalFrames } = get();
+    const combined = compositeFrame(layers, currentFrame, width, height, 'viewport', totalFrames);
     set({ compositedSvg: combined });
   },
 };
