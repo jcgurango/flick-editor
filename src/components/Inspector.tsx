@@ -62,6 +62,7 @@ export function Inspector() {
   const setBackground = useProjectStore((s) => s.setBackground);
   const setLayerClip = useProjectStore((s) => s.setLayerClip);
   const setLayerMask = useProjectStore((s) => s.setLayerMask);
+  const setLayerLoop = useProjectStore((s) => s.setLayerLoop);
 
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
   const currentKeyframe = selectedLayer?.keyframes.find((kf) => kf.frame === currentFrame) ?? null;
@@ -191,6 +192,17 @@ export function Inspector() {
               {layers.filter((l) => l.id !== selectedLayerId).map((l) => (
                 <option key={l.id} value={l.id}>{l.id}</option>
               ))}
+            </select>
+          </div>
+          <div className="inspector-field">
+            <label>Loop</label>
+            <select
+              className="inspector-select"
+              value={selectedLayer.loop ? 'yes' : 'no'}
+              onChange={(e) => setLayerLoop(selectedLayerId, e.target.value === 'yes')}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
             </select>
           </div>
         </div>

@@ -30,19 +30,59 @@ function findSurroundingKeyframes(
 /**
  * Render a single layer at a given frame.
  * Returns the inner SVG content string, or empty string if no keyframes.
+ * When totalFrames is provided and layer.loop is true, interpolation wraps around.
  */
-export function renderLayer(layer: AnimationLayer, frame: number): string {
+export function renderLayer(layer: AnimationLayer, frame: number, totalFrames?: number): string {
   if (layer.keyframes.length === 0) return '';
 
-  const [before, after] = findSurroundingKeyframes(layer.keyframes, frame);
+  const kfs = layer.keyframes;
+
+  // Loop mode: wrap interpolation across totalFrames boundary
+  if (layer.loop && totalFrames && kfs.length >= 2) {
+    const first = kfs[0];
+    const last = kfs[kfs.length - 1];
+
+    const [before, after] = findSurroundingKeyframes(kfs, frame);
+
+    // Before the first keyframe — interpolate from last (wrapped) to first
+    if (!before) {
+      const wrapRange = (first.frame + totalFrames) - last.frame;
+      const dist = (frame + totalFrames) - last.frame;
+      const linearT = dist / wrapRange;
+      if (last.tween === 'discrete') {
+        return extractSvgInnerContent(last.svgContent);
+      }
+      const easeFn = getEasingFn(last.tween, last.easing);
+      const t = easeFn(linearT);
+      return interpolateSvg(last.svgContent, first.svgContent, t);
+    }
+
+    // After the last keyframe — interpolate from last to first (wrapped)
+    if (!after) {
+      if (before.frame === frame) {
+        return extractSvgInnerContent(before.svgContent);
+      }
+      const wrapRange = (first.frame + totalFrames) - last.frame;
+      const dist = frame - last.frame;
+      const linearT = dist / wrapRange;
+      if (last.tween === 'discrete') {
+        return extractSvgInnerContent(last.svgContent);
+      }
+      const easeFn = getEasingFn(last.tween, last.easing);
+      const t = easeFn(linearT);
+      return interpolateSvg(last.svgContent, first.svgContent, t);
+    }
+
+    // Between two keyframes — normal interpolation (fall through below)
+  }
+
+  const [before, after] = findSurroundingKeyframes(kfs, frame);
 
   if (!before) {
-    // Frame is before any keyframe — nothing to show
     return '';
   }
 
   if (!after || before.frame === frame) {
-    // Exactly on a keyframe, or past the last one — use before directly
     return extractSvgInnerContent(before.svgContent);
   }
 
@@ -69,7 +109,8 @@ export function compositeFrame(
   frame: number,
   _width: number,
   _height: number,
-  mode: CompositeMode = 'viewport'
+  mode: CompositeMode = 'viewport',
+  totalFrames?: number,
 ): string {
   let defs = '';
   let combined = '';
@@ -82,7 +123,7 @@ export function compositeFrame(
     const layer = layers[i];
     if (!isVisible(layer) || layer.keyframes.length === 0) continue;
 
-    const inner = renderLayer(layer, frame);
+    const inner = renderLayer(layer, frame, totalFrames);
     if (!inner) continue;
 
     // Build clip-path / mask defs if referenced
@@ -91,7 +132,7 @@ export function compositeFrame(
     if (layer.clipLayerId) {
       const clipLayer = layerMap.get(layer.clipLayerId);
       if (clipLayer && clipLayer.keyframes.length > 0) {
-        const clipContent = renderLayer(clipLayer, frame);
+        const clipContent = renderLayer(clipLayer, frame, totalFrames);
         if (clipContent) {
           const clipId = `clip-${layer.id}`;
           defs += `<clipPath id="${clipId}">${clipContent}</clipPath>\n`;
@@ -103,7 +144,7 @@ export function compositeFrame(
     if (layer.maskLayerId) {
       const maskLayer = layerMap.get(layer.maskLayerId);
       if (maskLayer && maskLayer.keyframes.length > 0) {
-        const maskContent = renderLayer(maskLayer, frame);
+        const maskContent = renderLayer(maskLayer, frame, totalFrames);
         if (maskContent) {
           const maskId = `mask-${layer.id}`;
           defs += `<mask id="${maskId}">${maskContent}</mask>\n`;
@@ -129,10 +170,11 @@ export function exportFrame(
   background: BackgroundSettings | null,
   exportWidth?: number,
   exportHeight?: number,
+  totalFrames?: number,
 ): string {
   const w = exportWidth || width;
   const h = exportHeight || height;
-  const inner = compositeFrame(layers, frame, width, height, 'render');
+  const inner = compositeFrame(layers, frame, width, height, 'render', totalFrames);
 
   let bgContent = '';
   if (background) {
