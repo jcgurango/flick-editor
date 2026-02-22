@@ -28,6 +28,7 @@ export interface AnimationLayer {
   clipLayerId: string | null;  // layer used as clip-path (compositing only)
   maskLayerId: string | null;  // layer used as mask (compositing only)
   loop: boolean;             // wrap interpolation around totalFrames boundary
+  ghostEndFrame: boolean;    // show extra guide frame at totalFrames for tweening
   keyframes: Keyframe[]; // Sorted by frame
 }
 
@@ -132,6 +133,7 @@ export interface ProjectState {
   setLayerClip: (id: string, clipLayerId: string | null) => void;
   setLayerMask: (id: string, maskLayerId: string | null) => void;
   setLayerLoop: (id: string, loop: boolean) => void;
+  setLayerGhostEndFrame: (id: string, ghost: boolean) => void;
   selectLayer: (id: string | null) => void;
 
   // ── Keyframe actions ──────────────────────────────────
@@ -235,6 +237,7 @@ function buildProjectJson(state: {
       clipLayerId: l.clipLayerId,
       maskLayerId: l.maskLayerId,
       loop: l.loop,
+      ghostEndFrame: l.ghostEndFrame,
       keyframes: l.keyframes.map((kf) => ({
         frame: kf.frame,
         tween: kf.tween,
@@ -344,6 +347,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       clipLayerId: null,
       maskLayerId: null,
       loop: false,
+      ghostEndFrame: false,
       keyframes: [],
     };
 
@@ -434,6 +438,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         clipLayerId: layerDef.clipLayerId || null,
         maskLayerId: layerDef.maskLayerId || null,
         loop: layerDef.loop === true,
+        ghostEndFrame: layerDef.ghostEndFrame === true,
         keyframes,
       });
     }
@@ -529,6 +534,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       clipLayerId: null,
       maskLayerId: null,
       loop: false,
+      ghostEndFrame: false,
       keyframes: [],
     };
 
@@ -614,6 +620,16 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     set((s) => ({
       layers: s.layers.map((l) =>
         l.id === id ? { ...l, loop } : l
+      ),
+    }));
+    get().recomposite();
+  },
+
+  setLayerGhostEndFrame: (id: string, ghost: boolean) => {
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, ghostEndFrame: ghost } : l
       ),
     }));
     get().recomposite();

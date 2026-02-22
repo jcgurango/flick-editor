@@ -386,6 +386,16 @@
   background: rgba(255, 180, 50, 0.25);
 }
 
+/* Ghost end frame */
+.timeline-frame-cell.ghost-frame {
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 1px solid #555;
+}
+
+.timeline-frame-cell.ghost-frame .keyframe-dot {
+  background: #7a5fff;
+}
+
 /* Keyframe indicator dot */
 .keyframe-dot {
   display: block;

@@ -111,11 +111,14 @@ export function Timeline() {
     const x = e.clientX - framesRect.left + framesEl.scrollLeft;
     const frame = Math.floor(x / 18);
 
+    const clampedLayerIdx = Math.max(0, Math.min(layers.length - 1, layerIdx));
+    const maxFrame = layers[clampedLayerIdx]?.ghostEndFrame ? totalFrames : totalFrames - 1;
+
     return {
-      layerIdx: Math.max(0, Math.min(layers.length - 1, layerIdx)),
-      frame: Math.max(0, Math.min(totalFrames - 1, frame)),
+      layerIdx: clampedLayerIdx,
+      frame: Math.max(0, Math.min(maxFrame, frame)),
     };
-  }, [layers.length, totalFrames]);
+  }, [layers, totalFrames]);
 
   const handleCellMouseDown = useCallback((layerIdx: number, frame: number, e: React.MouseEvent) => {
     if (isEditing) return;
@@ -333,6 +336,21 @@ export function Timeline() {
                   )}
                 </div>
               ))}
+              {layer.ghostEndFrame && (
+                <div
+                  className={
+                    `timeline-frame-cell ghost-frame` +
+                    `${hasKeyframe(layer.id, totalFrames) ? ' has-keyframe' : ''}` +
+                    `${isCellSelected(layerIdx, totalFrames) ? ' selected-cell' : ''}`
+                  }
+                  onMouseDown={(e) => handleCellMouseDown(layerIdx, totalFrames, e)}
+                  onDoubleClick={(e) => { e.stopPropagation(); handleDoubleClickCell(layer.id, totalFrames); }}
+                >
+                  {hasKeyframe(layer.id, totalFrames) && (
+                    <span className="keyframe-dot" />
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}
