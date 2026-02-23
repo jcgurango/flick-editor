@@ -127,49 +127,160 @@ ipcMain.handle('config:set', async (_event, key, value) => {
   writeConfig(config);
 });
 
-// ── Inkscape ──────────────────────────────────────────────
+// ── Inkscape Pipe Mode ────────────────────────────────────
 
-let inkscapeChild = null;
+let inkscapeProc = null;
+let inkscapeWindowId = null;
+let pendingOpenResolve = null;
 
-ipcMain.handle('inkscape:spawn', (_event, filePath) => {
+function parseInkscapeStdout(stream) {
+  let buffer = '';
+  let expecting = null; // { windowId, contentLength, filename }
+
+  stream.on('data', (chunk) => {
+    process.stdout.write(`[ink stdout] ${chunk}`);
+    buffer += chunk.toString();
+
+    while (true) {
+      if (!expecting) {
+        const lineEnd = buffer.indexOf('\n');
+        if (lineEnd === -1) break;
+
+        const line = buffer.slice(0, lineEnd);
+        buffer = buffer.slice(lineEnd + 1);
+
+        // OPEN <id>
+        const openMatch = line.match(/^OPEN (\d+)$/);
+        if (openMatch) {
+          const id = parseInt(openMatch[1]);
+          inkscapeWindowId = id;
+          if (pendingOpenResolve) {
+            pendingOpenResolve(id);
+            pendingOpenResolve = null;
+          }
+          continue;
+        }
+
+        // CLOSE <id>  (user closed the window)
+        const closeMatch = line.match(/^CLOSE (\d+)$/);
+        if (closeMatch) {
+          const id = parseInt(closeMatch[1]);
+          if (inkscapeWindowId === id) {
+            inkscapeWindowId = null;
+          }
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inkscape:windowClosed');
+          }
+          continue;
+        }
+
+        // SAVE <id> content-length:<N>
+        const saveMatch = line.match(/^SAVE (\d+) content-length:(\d+)$/);
+        if (saveMatch) {
+          expecting = {
+            windowId: parseInt(saveMatch[1]),
+            contentLength: parseInt(saveMatch[2]),
+            filename: null,
+          };
+          continue;
+        }
+
+        continue;
+      }
+
+      // Reading filename line
+      if (expecting.filename === null) {
+        const lineEnd = buffer.indexOf('\n');
+        if (lineEnd === -1) break;
+        expecting.filename = buffer.slice(0, lineEnd);
+        buffer = buffer.slice(lineEnd + 1);
+      }
+
+      // Reading SVG content
+      const available = Buffer.byteLength(buffer, 'utf-8');
+      if (available < expecting.contentLength) break;
+
+      const buf = Buffer.from(buffer, 'utf-8');
+      const content = buf.subarray(0, expecting.contentLength).toString('utf-8');
+      buffer = buf.subarray(expecting.contentLength).toString('utf-8');
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('inkscape:saved', expecting.filename, content);
+      }
+      expecting = null;
+    }
+  });
+}
+
+function ensureInkscape() {
   return new Promise((resolve, reject) => {
-    const config = readConfig();
-    const inkscapeBin = config.inkscapePath || 'inkscape';
-    let settled = false;
+    if (inkscapeProc && !inkscapeProc.killed) {
+      resolve();
+      return;
+    }
 
-    const child = spawn(inkscapeBin, [filePath], {
-      stdio: 'ignore',
+    const config = readConfig();
+    const devInkscape = path.join(__dirname, '..', 'inkscape', 'build', 'install_dir', 'bin', 'inkscape.exe');
+    const customPath = config.inkscapePath && config.inkscapePath.trim();
+    const bin = customPath || (isDev ? devInkscape : 'inkscape');
+
+    console.log(`[ink] Starting: ${bin} --pipe-mode`);
+    const proc = spawn(bin, ['--pipe-mode'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    inkscapeChild = child;
+    inkscapeProc = proc;
+    inkscapeWindowId = null;
+    let started = false;
 
-    child.on('error', (err) => {
-      inkscapeChild = null;
-      if (!settled) {
-        settled = true;
+    proc.on('error', (err) => {
+      inkscapeProc = null;
+      inkscapeWindowId = null;
+      if (!started) {
+        started = true;
         reject(err);
       }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('inkscape:exited', err.message);
-      }
     });
 
-    child.on('spawn', () => {
-      // Process started successfully — detach and resolve
-      child.unref();
-      if (!settled) {
-        settled = true;
-        resolve(undefined);
-      }
+    proc.on('spawn', () => {
+      started = true;
+      parseInkscapeStdout(proc.stdout);
+      proc.stderr.on('data', (d) => { process.stderr.write(`[ink stderr] ${d}`); });
+      resolve();
     });
 
-    child.on('exit', () => {
-      inkscapeChild = null;
+    proc.on('exit', () => {
+      inkscapeProc = null;
+      inkscapeWindowId = null;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('inkscape:exited', null);
+        mainWindow.webContents.send('inkscape:windowClosed');
       }
     });
   });
+}
+
+function openInkscapeWindow() {
+  return new Promise((resolve) => {
+    pendingOpenResolve = resolve;
+    console.log('[ink stdin] OPEN');
+    inkscapeProc.stdin.write('OPEN\n');
+  });
+}
+
+// IPC: load SVG into Inkscape (starts process + opens window if needed)
+ipcMain.handle('inkscape:load', async (_event, filename, svgData) => {
+  await ensureInkscape();
+
+  if (!inkscapeWindowId) {
+    await openInkscapeWindow();
+  }
+
+  const buf = Buffer.from(svgData, 'utf-8');
+  const header = `LOAD ${inkscapeWindowId} content-length:${buf.length}\n${filename}\n`;
+  console.log(`[ink stdin] LOAD ${inkscapeWindowId} content-length:${buf.length} filename:${filename}`);
+  console.log(`[ink stdin] ${svgData}`);
+  inkscapeProc.stdin.write(header);
+  inkscapeProc.stdin.write(buf);
 });
 
 // ── File Watching ─────────────────────────────────────────
@@ -211,9 +322,20 @@ app.on('window-all-closed', () => {
   }
   watchers.clear();
 
+  // Kill Inkscape pipe-mode process
+  if (inkscapeProc && !inkscapeProc.killed) {
+    inkscapeProc.stdin.end();
+    inkscapeProc.kill();
+    inkscapeProc = null;
+    inkscapeWindowId = null;
+  }
+
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+
+// Start inkscape in the background so it doesn't take long to startup
+ensureInkscape();

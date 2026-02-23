@@ -156,8 +156,8 @@ export interface ProjectState {
   // ── Inkscape editing ──────────────────────────────────
 
   startEditing: (layerId: string, frame: number) => Promise<void>;
-  stopEditing: () => Promise<void>;
-  handleEditingFileChanged: () => Promise<void>;
+  stopEditing: () => void;
+  handleInkscapeSave: (svgContent: string) => Promise<void>;
 
   // ── Timeline / Canvas ─────────────────────────────────
 
@@ -886,7 +886,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     get().recomposite();
   },
 
-  // ── Inkscape editing ────────────────────────────────────
+  // ── Inkscape editing (pipe mode) ─────────────────────────
 
   startEditing: async (layerId: string, frame: number) => {
     const state = get();
@@ -902,13 +902,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     // Stop playback before editing
     if (state.playing) get().stop();
 
+    // Clean up previous editing session listeners
     if (state.editingKeyframe) {
-      await get().stopEditing();
+      const saveCleanup = (state as any)._saveCleanup;
+      if (saveCleanup) saveCleanup();
+      const closeCleanup = (state as any)._closeCleanup;
+      if (closeCleanup) closeCleanup();
     }
 
     const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
     await api.mkdir(editDir);
 
+    // Write context layer SVGs to disk (Inkscape loads them via file:// refs)
     const contextRefs: { id: string; filePath: string }[] = [];
     for (const otherLayer of state.layers) {
       if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
@@ -953,17 +958,20 @@ ${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
 ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 </svg>`;
 
+    // Full path used as Inkscape document filename for proper file:// resolution
     const frameStr = String(frame).padStart(3, '0');
     const workingPath = await api.pathJoin(editDir, `editing_${layerId}_kf${frameStr}.svg`);
-    await api.writeFile(workingPath, workingSvg);
 
-    await api.watchFile(workingPath);
-
-    const cleanup = api.onFileChanged((changedPath: string) => {
-      if (changedPath === workingPath) {
-        get().handleEditingFileChanged();
-      }
+    // Set up pipe-mode listeners
+    const saveCleanup = api.onInkscapeSaved((_filename: string, svgContent: string) => {
+      get().handleInkscapeSave(svgContent);
     });
+    (get() as any)._saveCleanup = saveCleanup;
+
+    const closeCleanup = api.onInkscapeWindowClosed(() => {
+      get().stopEditing();
+    });
+    (get() as any)._closeCleanup = closeCleanup;
 
     set({
       editingKeyframe: {
@@ -973,66 +981,83 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       },
     });
 
-    (get() as any)._editCleanup = cleanup;
-
-    const exitCleanup = api.onInkscapeExited(() => {
-      get().stopEditing();
-    });
-    (get() as any)._exitCleanup = exitCleanup;
-
     try {
-      await api.spawnInkscape(workingPath);
+      await api.inkscapeLoad(workingPath, workingSvg);
     } catch {
-      await get().stopEditing();
+      get().stopEditing();
     }
   },
 
-  stopEditing: async () => {
+  stopEditing: () => {
     const state = get();
     if (!state.editingKeyframe) return;
 
-    const api = window.api;
-    await api.unwatchFile(state.editingKeyframe.filePath);
+    const saveCleanup = (state as any)._saveCleanup;
+    if (saveCleanup) saveCleanup();
 
-    const cleanup = (state as any)._editCleanup;
-    if (cleanup) cleanup();
-
-    const exitCleanup = (state as any)._exitCleanup;
-    if (exitCleanup) exitCleanup();
+    const closeCleanup = (state as any)._closeCleanup;
+    if (closeCleanup) closeCleanup();
 
     set({ editingKeyframe: null });
   },
 
-  handleEditingFileChanged: async () => {
+  handleInkscapeSave: async (svgContent: string) => {
     const state = get();
     if (!state.editingKeyframe || !state.projectPath) return;
 
     const api = window.api;
-    const { layerId, frame, filePath } = state.editingKeyframe;
+    const { layerId, frame } = state.editingKeyframe;
 
-    const workingSvg = await api.readFile(filePath);
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
+    const SODIPODI_NS = 'http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd';
 
-    let cleaned = workingSvg;
-    cleaned = cleaned.replace(
-      /<g[^>]*inkscape:label="\[ctx\][^"]*"[^>]*>[\s\S]*?<\/g>/g,
-      ''
-    );
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgContent, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) return;
 
-    // Preserve root-level <defs> (gradients, filters, clip-paths, etc.)
-    const defsBlocks: string[] = [];
-    cleaned.replace(/<defs[\s>][\s\S]*?<\/defs>/gi, (match) => {
-      defsBlocks.push(match);
-      return '';
-    });
-    const defsContent = defsBlocks.length > 0 ? defsBlocks.join('\n') + '\n' : '';
+    const serializer = new XMLSerializer();
+    function serializeChildren(el: Element): string {
+      let out = '';
+      for (let i = 0; i < el.childNodes.length; i++) {
+        out += serializer.serializeToString(el.childNodes[i]);
+      }
+      // Strip svg: namespace prefix (Inkscape pipe-mode uses it)
+      return out.replace(/<(\/?)svg:/g, '<$1').replace(/\s+xmlns:svg="[^"]*"/g, '');
+    }
 
-    const layerMatch = cleaned.match(
-      /<g[^>]*inkscape:groupmode="layer"[^>]*>([\s\S]*?)<\/g>/
-    );
+    // Remove sodipodi:namedview
+    for (const nv of Array.from(doc.getElementsByTagNameNS(SODIPODI_NS, 'namedview'))) {
+      nv.parentNode?.removeChild(nv);
+    }
 
-    const innerContent = layerMatch ? layerMatch[1].trim() : extractSvgInnerContent(cleaned);
+    // Remove [ctx] layers
+    for (const g of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'g'))) {
+      const label = g.getAttributeNS(INKSCAPE_NS, 'label');
+      if (label && label.startsWith('[ctx]')) {
+        g.parentNode?.removeChild(g);
+      }
+    }
 
-    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsContent}${innerContent}\n</svg>`;
+    // Collect defs content (skip empty defs)
+    let defsContent = '';
+    for (const defs of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'defs'))) {
+      if (defs.childElementCount > 0) {
+        defsContent += serializeChildren(defs);
+      }
+    }
+
+    // Find the editable layer group and extract its content
+    let innerContent = '';
+    for (const g of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'g'))) {
+      if (g.getAttributeNS(INKSCAPE_NS, 'groupmode') === 'layer') {
+        innerContent = serializeChildren(g);
+        break;
+      }
+    }
+
+    const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
+    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsBlock}${innerContent.trim()}\n</svg>`;
 
     const kfPath = await api.pathJoin(
       state.projectPath, 'layers', layerId, frameToFilename(frame)

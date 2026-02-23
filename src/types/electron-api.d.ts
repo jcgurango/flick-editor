@@ -7,6 +7,7 @@ export interface ElectronAPI {
   rm(filePath: string): Promise<void>;
   rmdir(dirPath: string): Promise<void>;
   exists(filePath: string): Promise<boolean>;
+  readFileAsDataUrl(filePath: string): Promise<string>;
 
   // Path utilities
   pathJoin(...segments: string[]): Promise<string>;
@@ -30,9 +31,10 @@ export interface ElectronAPI {
   getConfig(key?: string): Promise<any>;
   setConfig(key: string, value: any): Promise<void>;
 
-  // Inkscape
-  spawnInkscape(filePath: string): Promise<void>;
-  onInkscapeExited(callback: (errorMsg: string | null) => void): () => void;
+  // Inkscape pipe mode
+  inkscapeLoad(filename: string, svgData: string): Promise<void>;
+  onInkscapeSaved(callback: (filename: string, svgContent: string) => void): () => void;
+  onInkscapeWindowClosed(callback: () => void): () => void;
 
   // File watching
   watchFile(filePath: string): Promise<void>;

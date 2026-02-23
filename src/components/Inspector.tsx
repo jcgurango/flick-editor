@@ -281,6 +281,14 @@ export function Inspector() {
             <span className="inspector-path-value" title={inkscapePath}>
               {inkscapePath || '(auto)'}
             </span>
+            {inkscapePath && (
+              <button className="inspector-browse-btn" onClick={async () => {
+                await window.api.setConfig('inkscapePath', '');
+                setInkscapePath('');
+              }} title="Clear custom path">
+                x
+              </button>
+            )}
             <button className="inspector-browse-btn" onClick={browseInkscape}>
               ...
             </button>

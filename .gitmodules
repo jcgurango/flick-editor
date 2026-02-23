@@ -1,0 +1,3 @@
+[submodule "inkscape"]
+	path = inkscape
+	url = https://github.com/jcgurango/flick-inkscape.git
