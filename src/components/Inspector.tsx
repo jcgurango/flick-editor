@@ -50,8 +50,6 @@ export function Inspector() {
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId);
   const layers = useProjectStore((s) => s.layers);
   const projectPath = useProjectStore((s) => s.projectPath);
-  const editingKeyframe = useProjectStore((s) => s.editingKeyframe);
-  const stopEditing = useProjectStore((s) => s.stopEditing);
   const setProjectDimensions = useProjectStore((s) => s.setProjectDimensions);
   const setFps = useProjectStore((s) => s.setFps);
   const setTotalFrames = useProjectStore((s) => s.setTotalFrames);
@@ -253,23 +251,6 @@ export function Inspector() {
               <option value="in-out">In-Out</option>
             </select>
           </div>
-        </div>
-      )}
-
-      {editingKeyframe && (
-        <div className="inspector-section">
-          <div className="inspector-section-title">Editing</div>
-          <div className="inspector-field">
-            <label>Layer</label>
-            <span className="inspector-value">{editingKeyframe.layerId}</span>
-          </div>
-          <div className="inspector-field">
-            <label>Frame</label>
-            <span className="inspector-value">{editingKeyframe.frame + 1}</span>
-          </div>
-          <button className="inspector-stop-btn" onClick={stopEditing}>
-            Stop Editing
-          </button>
         </div>
       )}
 

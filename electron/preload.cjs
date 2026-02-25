@@ -35,6 +35,16 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('inkscape:windowClosed', listener);
     return () => ipcRenderer.removeListener('inkscape:windowClosed', listener);
   },
+  onInkscapeUndo: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('inkscape:undo', listener);
+    return () => ipcRenderer.removeListener('inkscape:undo', listener);
+  },
+  onInkscapeRedo: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('inkscape:redo', listener);
+    return () => ipcRenderer.removeListener('inkscape:redo', listener);
+  },
 
   // File watching
   watchFile: (filePath) => ipcRenderer.invoke('watch:start', filePath),

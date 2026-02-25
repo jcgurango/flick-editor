@@ -13,7 +13,6 @@ export function Timeline() {
   const addKeyframe = useProjectStore((s) => s.addKeyframe);
   const startEditing = useProjectStore((s) => s.startEditing);
   const projectPath = useProjectStore((s) => s.projectPath);
-  const editing = useProjectStore((s) => s.editingKeyframe);
   const selection = useProjectStore((s) => s.selection);
   const setSelectionAnchor = useProjectStore((s) => s.setSelectionAnchor);
   const setSelectionEnd = useProjectStore((s) => s.setSelectionEnd);
@@ -24,7 +23,6 @@ export function Timeline() {
   const play = useProjectStore((s) => s.play);
   const stop = useProjectStore((s) => s.stop);
 
-  const isEditing = editing !== null;
   const isScrubbing = useRef(false);
   const isDraggingSelection = useRef(false);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -79,7 +77,7 @@ export function Timeline() {
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [isEditing, playing, stop, frameFromHeaderEvent, setCurrentFrame]);
+  }, [playing, stop, frameFromHeaderEvent, setCurrentFrame]);
 
   // ── Cell selection drag ────────────────────────────────
 
@@ -121,7 +119,6 @@ export function Timeline() {
   }, [layers, totalFrames]);
 
   const handleCellMouseDown = useCallback((layerIdx: number, frame: number, e: React.MouseEvent) => {
-    if (isEditing) return;
     e.stopPropagation();
     e.preventDefault();
     isDraggingSelection.current = true;
@@ -142,7 +139,7 @@ export function Timeline() {
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [isEditing, setSelectionAnchor, setSelectionEnd, commitSelection, cellFromMouseEvent]);
+  }, [setSelectionAnchor, setSelectionEnd, commitSelection, cellFromMouseEvent]);
 
   // ── Layer drag reorder ─────────────────────────────────
 
@@ -159,7 +156,6 @@ export function Timeline() {
   }, []);
 
   const handleLayerInfoMouseDown = useCallback((layerIdx: number, e: React.MouseEvent) => {
-    if (isEditing) return;
     e.stopPropagation();
 
     // Select the layer immediately
@@ -193,12 +189,12 @@ export function Timeline() {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [isEditing, layers, selectLayer, moveLayer, layerIdxFromMouseEvent]);
+  }, [layers, selectLayer, moveLayer, layerIdxFromMouseEvent]);
 
   // ── Double-click to edit ────────────────────────────────
 
   const handleDoubleClickCell = (layerId: string, frame: number) => {
-    if (!projectPath || isEditing) return;
+    if (!projectPath) return;
     const layer = layers.find((l) => l.id === layerId);
     if (!layer) return;
     if (layer.keyframes.some((kf) => kf.frame === frame)) {
@@ -209,7 +205,7 @@ export function Timeline() {
   // ── Keyframe helpers ────────────────────────────────────
 
   const handleAddKeyframe = (fromReference: boolean) => {
-    if (!selectedLayerId || !projectPath || isEditing) return;
+    if (!selectedLayerId || !projectPath) return;
     addKeyframe(selectedLayerId, currentFrame, fromReference);
   };
 
@@ -230,7 +226,7 @@ export function Timeline() {
                   className="timeline-add-kf"
                   onClick={() => handleAddKeyframe(true)}
                   title="Add keyframe from nearest reference (F6)"
-                  disabled={!selectedLayerId || isEditing}
+                  disabled={!selectedLayerId}
                 >
                   +KF
                 </button>
@@ -238,7 +234,7 @@ export function Timeline() {
                   className="timeline-add-kf"
                   onClick={() => handleAddKeyframe(false)}
                   title="Add empty keyframe (F7)"
-                  disabled={!selectedLayerId || isEditing}
+                  disabled={!selectedLayerId}
                 >
                   +E
                 </button>
@@ -248,7 +244,6 @@ export function Timeline() {
               className="timeline-add-layer"
               onClick={() => addLayer()}
               title="Add Layer"
-              disabled={isEditing}
             >
               +
             </button>
@@ -273,7 +268,7 @@ export function Timeline() {
         </div>
       </div>
       <div
-        className={`timeline-body${isEditing ? ' editing-locked' : ''}`}
+        className="timeline-body"
         ref={bodyRef}
         onScroll={() => {
           if (bodyRef.current && headerRef.current) {
@@ -301,18 +296,16 @@ export function Timeline() {
               <button
                 className="layer-btn layer-vis-btn"
                 style={{ opacity: layer.viewportVisible ? 1 : 0.3 }}
-                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleViewportVisible(layer.id); }}
+                onClick={(e) => { e.stopPropagation(); toggleViewportVisible(layer.id); }}
                 title={layer.viewportVisible ? 'Hide in viewport' : 'Show in viewport'}
-                disabled={isEditing}
               >
                 &#x1F441;
               </button>
               <button
                 className="layer-btn layer-vis-btn"
                 style={{ opacity: layer.renderVisible ? 1 : 0.3 }}
-                onClick={(e) => { e.stopPropagation(); if (!isEditing) toggleRenderVisible(layer.id); }}
+                onClick={(e) => { e.stopPropagation(); toggleRenderVisible(layer.id); }}
                 title={layer.renderVisible ? 'Exclude from render' : 'Include in render'}
-                disabled={isEditing}
               >
                 &#x1F3A5;
               </button>
@@ -363,7 +356,6 @@ export function Timeline() {
         <button
           className="playback-btn"
           onClick={() => playing ? stop() : play()}
-          disabled={isEditing}
           title={playing ? 'Pause (Space)' : 'Play (Space)'}
         >
           {playing ? '\u23F8' : '\u25B6'}

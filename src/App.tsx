@@ -30,20 +30,15 @@ function App() {
   }, [projectPath, dirty]);
 
   useEffect(() => {
-    const isEditing = () => useProjectStore.getState().editingKeyframe !== null;
-
     function handleKeyDown(e: KeyboardEvent) {
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
 
-      // Save works even during editing
       if (ctrl && key === 's') {
         e.preventDefault();
         saveProject();
         return;
       }
-
-      if (isEditing()) return;
 
       // Play/pause — Space (only when not focused on an input)
       if (e.key === ' ' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement)) {

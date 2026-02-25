@@ -156,8 +156,8 @@ export interface ProjectState {
   // ── Inkscape editing ──────────────────────────────────
 
   startEditing: (layerId: string, frame: number) => Promise<void>;
-  stopEditing: () => void;
   handleInkscapeSave: (svgContent: string) => Promise<void>;
+  reloadInkscapeDocument: () => Promise<void>;
 
   // ── Timeline / Canvas ─────────────────────────────────
 
@@ -264,6 +264,19 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     set({ undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true });
   }
 
+  /** Clean up Inkscape listeners and clear editing state */
+  function clearEditing() {
+    const state = get();
+    if (!state.editingKeyframe) return;
+
+    for (const key of ['_saveCleanup', '_closeCleanup', '_undoCleanup', '_redoCleanup']) {
+      const cleanup = (state as any)[key];
+      if (cleanup) cleanup();
+    }
+
+    set({ editingKeyframe: null });
+  }
+
   return {
   projectPath: null,
   dirty: false,
@@ -300,7 +313,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   // ── Undo / Redo ─────────────────────────────────────────
 
   undo: () => {
-    const { undoStack, layers } = get();
+    const { undoStack, layers, editingKeyframe } = get();
     if (undoStack.length === 0) return;
     const prev = undoStack[undoStack.length - 1];
     const newUndoStack = undoStack.slice(0, -1);
@@ -313,10 +326,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       dirty: true,
     }));
     get().recomposite();
+    if (editingKeyframe) {
+      get().reloadInkscapeDocument();
+    }
   },
 
   redo: () => {
-    const { redoStack, layers } = get();
+    const { redoStack, layers, editingKeyframe } = get();
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     const newRedoStack = redoStack.slice(0, -1);
@@ -329,6 +345,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       dirty: true,
     }));
     get().recomposite();
+    if (editingKeyframe) {
+      get().reloadInkscapeDocument();
+    }
   },
 
   // ── Project lifecycle ───────────────────────────────────
@@ -886,6 +905,73 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     get().recomposite();
   },
 
+  reloadInkscapeDocument: async () => {
+    const state = get();
+    if (!state.editingKeyframe || !state.projectPath) return;
+    const api = window.api;
+
+    const { layerId, frame, filePath: workingPath } = state.editingKeyframe;
+    const layer = state.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+
+    const kf = layer.keyframes.find((k) => k.frame === frame);
+    if (!kf) return;
+
+    const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
+    await api.mkdir(editDir);
+
+    // Rebuild context layer SVGs
+    const contextRefs: { id: string; filePath: string }[] = [];
+    for (const otherLayer of state.layers) {
+      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
+
+      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
+      if (!nearestKf) continue;
+
+      const ctxPath = await api.pathJoin(editDir, `context_${otherLayer.id}.svg`);
+      await api.writeFile(ctxPath, nearestKf.svgContent);
+      contextRefs.push({ id: otherLayer.id, filePath: ctxPath });
+    }
+
+    const editableContent = extractSvgInnerContent(kf.svgContent);
+
+    let contextLayers = '';
+
+    if (state.background.type === 'solid') {
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <rect width="${state.width}" height="${state.height}" fill="${state.background.color}" />\n`;
+      contextLayers += `  </g>\n`;
+    } else if (state.background.type === 'image' && state.background.imageData) {
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
+      contextLayers += `  </g>\n`;
+    }
+
+    for (const ctx of contextRefs) {
+      const fileUri = ctx.filePath.replace(/\\/g, '/');
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${ctx.id}" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="file:///${fileUri}" width="${state.width}" height="${state.height}" />\n`;
+      contextLayers += `  </g>\n`;
+    }
+
+    const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+     width="${state.width}" height="${state.height}"
+     viewBox="0 0 ${state.width} ${state.height}">
+${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
+${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
+</svg>`;
+
+    try {
+      await api.inkscapeLoad(workingPath, workingSvg);
+    } catch {
+      // Inkscape may have closed; stop editing
+      clearEditing();
+    }
+  },
+
   // ── Inkscape editing (pipe mode) ─────────────────────────
 
   startEditing: async (layerId: string, frame: number) => {
@@ -904,10 +990,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     // Clean up previous editing session listeners
     if (state.editingKeyframe) {
-      const saveCleanup = (state as any)._saveCleanup;
-      if (saveCleanup) saveCleanup();
-      const closeCleanup = (state as any)._closeCleanup;
-      if (closeCleanup) closeCleanup();
+      clearEditing();
     }
 
     const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
@@ -969,9 +1052,19 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     (get() as any)._saveCleanup = saveCleanup;
 
     const closeCleanup = api.onInkscapeWindowClosed(() => {
-      get().stopEditing();
+      clearEditing();
     });
     (get() as any)._closeCleanup = closeCleanup;
+
+    const undoCleanup = api.onInkscapeUndo(() => {
+      get().undo();
+    });
+    (get() as any)._undoCleanup = undoCleanup;
+
+    const redoCleanup = api.onInkscapeRedo(() => {
+      get().redo();
+    });
+    (get() as any)._redoCleanup = redoCleanup;
 
     set({
       editingKeyframe: {
@@ -984,26 +1077,15 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     try {
       await api.inkscapeLoad(workingPath, workingSvg);
     } catch {
-      get().stopEditing();
+      clearEditing();
     }
-  },
-
-  stopEditing: () => {
-    const state = get();
-    if (!state.editingKeyframe) return;
-
-    const saveCleanup = (state as any)._saveCleanup;
-    if (saveCleanup) saveCleanup();
-
-    const closeCleanup = (state as any)._closeCleanup;
-    if (closeCleanup) closeCleanup();
-
-    set({ editingKeyframe: null });
   },
 
   handleInkscapeSave: async (svgContent: string) => {
     const state = get();
     if (!state.editingKeyframe || !state.projectPath) return;
+
+    pushUndo();
 
     const api = window.api;
     const { layerId, frame } = state.editingKeyframe;
@@ -1064,8 +1146,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     );
     await api.writeFile(kfPath, cleanSvg);
 
-    pushUndo();
-
+    set({ dirty: true });
     set((s) => ({
       layers: s.layers.map((l) => {
         if (l.id !== layerId) return l;
@@ -1115,8 +1196,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   // ── Playback ────────────────────────────────────────────
 
   play: () => {
-    const { editingKeyframe, playing } = get();
-    if (editingKeyframe || playing) return;
+    const { playing } = get();
+    if (playing) return;
     set({ playing: true });
 
     let lastTime = performance.now();

@@ -174,6 +174,24 @@ function parseInkscapeStdout(stream) {
           continue;
         }
 
+        // UNDO <id>
+        const undoMatch = line.match(/^UNDO (\d+)$/);
+        if (undoMatch) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inkscape:undo');
+          }
+          continue;
+        }
+
+        // REDO <id>
+        const redoMatch = line.match(/^REDO (\d+)$/);
+        if (redoMatch) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inkscape:redo');
+          }
+          continue;
+        }
+
         // SAVE <id> content-length:<N>
         const saveMatch = line.match(/^SAVE (\d+) content-length:(\d+)$/);
         if (saveMatch) {
@@ -224,8 +242,8 @@ function ensureInkscape() {
     const customPath = config.inkscapePath && config.inkscapePath.trim();
     const bin = customPath || (isDev ? devInkscape : 'inkscape');
 
-    console.log(`[ink] Starting: ${bin} --pipe-mode`);
-    const proc = spawn(bin, ['--pipe-mode'], {
+    console.log(`[ink] Starting: ${bin} --pipe-mode --delegate-undo-stack`);
+    const proc = spawn(bin, ['--pipe-mode', '--delegate-undo-stack'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

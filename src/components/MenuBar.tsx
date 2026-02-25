@@ -38,9 +38,6 @@ export function MenuBar() {
   const selection = useProjectStore((s) => s.selection);
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId);
   const clipboard = useProjectStore((s) => s.clipboard);
-  const editing = useProjectStore((s) => s.editingKeyframe);
-
-  const isEditing = editing !== null;
   const hasSelection = selection !== null;
   const canDelete = hasSelection || (selectedLayerId !== null && !hasSelection);
 
@@ -75,9 +72,8 @@ export function MenuBar() {
             setOpenMenu(null);
             setShowNewProject(true);
           },
-          disabled: isEditing,
         },
-        { label: 'Open...', action: handleOpen, disabled: isEditing },
+        { label: 'Open...', action: handleOpen },
         { separator: true, label: '' },
         { label: 'Save', action: handleSave, shortcut: 'Ctrl+S' },
         { separator: true, label: '' },
@@ -87,7 +83,7 @@ export function MenuBar() {
             setOpenMenu(null);
             setShowExport(true);
           },
-          disabled: !projectPath || isEditing,
+          disabled: !projectPath,
         },
       ],
     },
@@ -98,26 +94,26 @@ export function MenuBar() {
           label: 'Undo',
           action: () => { setOpenMenu(null); undo(); },
           shortcut: 'Ctrl+Z',
-          disabled: !canUndo || isEditing,
+          disabled: !canUndo,
         },
         {
           label: 'Redo',
           action: () => { setOpenMenu(null); redo(); },
           shortcut: 'Ctrl+Shift+Z',
-          disabled: !canRedo || isEditing,
+          disabled: !canRedo,
         },
         { separator: true, label: '' },
         {
           label: 'Copy',
           action: () => { setOpenMenu(null); copySelection(); },
           shortcut: 'Ctrl+C',
-          disabled: !hasSelection || isEditing,
+          disabled: !hasSelection,
         },
         {
           label: 'Paste',
           action: () => { setOpenMenu(null); pasteAtSelection(); },
           shortcut: 'Ctrl+V',
-          disabled: !hasSelection || !clipboard || isEditing,
+          disabled: !hasSelection || !clipboard,
         },
         { separator: true, label: '' },
         {
@@ -131,7 +127,7 @@ export function MenuBar() {
             }
           },
           shortcut: 'Del',
-          disabled: !canDelete || isEditing,
+          disabled: !canDelete,
         },
       ],
     },

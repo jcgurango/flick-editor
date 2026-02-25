@@ -35,6 +35,8 @@ export interface ElectronAPI {
   inkscapeLoad(filename: string, svgData: string): Promise<void>;
   onInkscapeSaved(callback: (filename: string, svgContent: string) => void): () => void;
   onInkscapeWindowClosed(callback: () => void): () => void;
+  onInkscapeUndo(callback: () => void): () => void;
+  onInkscapeRedo(callback: () => void): () => void;
 
   // File watching
   watchFile(filePath: string): Promise<void>;
