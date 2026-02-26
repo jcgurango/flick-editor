@@ -45,16 +45,11 @@ export function MenuBar() {
     setOpenMenu(null);
     const result = await window.api.showOpenDialog({
       title: 'Open Flick Project',
-      properties: ['openDirectory'],
+      filters: [{ name: 'Flick Project', extensions: ['flick'] }],
+      properties: ['openFile'],
     });
     if (result.canceled || result.filePaths.length === 0) return;
-
-    const dir = result.filePaths[0];
-    const hasProject = await window.api.exists(
-      await window.api.pathJoin(dir, 'project.json')
-    );
-    if (!hasProject) return;
-    await openProject(dir);
+    await openProject(result.filePaths[0]);
   };
 
   const handleSave = async () => {

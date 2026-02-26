@@ -35,7 +35,6 @@ export interface AnimationLayer {
 export interface EditingState {
   layerId: string;
   frame: number;
-  filePath: string;     // Path to the working SVG in .cache/edit/
 }
 
 /** Rectangular selection on the timeline grid */
@@ -113,14 +112,14 @@ export interface ProjectState {
   // ── Project lifecycle ─────────────────────────────────
 
   newProject: (params: {
-    projectDir: string;
+    filePath: string;
     width: number;
     height: number;
     fps: number;
     totalFrames: number;
   }) => Promise<void>;
 
-  openProject: (projectDir: string) => Promise<void>;
+  openProject: (filePath: string) => Promise<void>;
   saveProject: () => Promise<void>;
 
   // ── Layer actions ─────────────────────────────────────
@@ -205,18 +204,19 @@ function findNearestKeyframe(keyframes: Keyframe[], frame: number): Keyframe | n
   return best;
 }
 
-/** Format frame number as kf_NNN */
-function frameToFilename(frame: number): string {
-  return `kf_${String(frame).padStart(3, '0')}.svg`;
-}
-
 /** Create a blank SVG with the given dimensions */
 function blankSvg(width: number, height: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"></svg>`;
 }
 
-/** Build project.json content */
-function buildProjectJson(state: {
+/** Escape XML special characters in attribute values */
+function escXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+/** Serialize the full project state to a .flick XML string */
+function buildFlickXml(state: {
   fps: number;
   totalFrames: number;
   width: number;
@@ -224,27 +224,94 @@ function buildProjectJson(state: {
   layers: AnimationLayer[];
   background: BackgroundSettings;
 }): string {
-  return JSON.stringify({
-    fps: String(state.fps),
-    frames: String(state.totalFrames),
-    width: String(state.width),
-    height: String(state.height),
-    background: state.background,
-    layers: state.layers.map((l) => ({
-      id: l.id,
-      renderVisible: l.renderVisible,
-      viewportVisible: l.viewportVisible,
-      clipLayerId: l.clipLayerId,
-      maskLayerId: l.maskLayerId,
-      loop: l.loop,
-      ghostEndFrame: l.ghostEndFrame,
-      keyframes: l.keyframes.map((kf) => ({
-        frame: kf.frame,
-        tween: kf.tween,
-        easing: kf.easing,
-      })),
-    })),
-  }, null, 2);
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+  xml += `<flick version="1" width="${state.width}" height="${state.height}" fps="${state.fps}" frames="${state.totalFrames}">\n`;
+
+  if (state.background.type === 'image' && state.background.imageData) {
+    xml += `  <background type="image"><image-data><![CDATA[${state.background.imageData}]]></image-data></background>\n`;
+  } else {
+    xml += `  <background type="${state.background.type}" color="${escXml(state.background.color)}"/>\n`;
+  }
+
+  for (const layer of state.layers) {
+    xml += `  <layer id="${escXml(layer.id)}" render-visible="${layer.renderVisible}" viewport-visible="${layer.viewportVisible}"`;
+    xml += ` clip="${escXml(layer.clipLayerId ?? '')}" mask="${escXml(layer.maskLayerId ?? '')}"`;
+    xml += ` loop="${layer.loop}" ghost-end-frame="${layer.ghostEndFrame}">\n`;
+
+    for (const kf of layer.keyframes) {
+      xml += `    <keyframe frame="${kf.frame}" tween="${kf.tween}" easing="${kf.easing}">\n`;
+      xml += `      ${kf.svgContent}\n`;
+      xml += `    </keyframe>\n`;
+    }
+
+    xml += `  </layer>\n`;
+  }
+
+  xml += `</flick>\n`;
+  return xml;
+}
+
+/** Parse a .flick XML string back into project data */
+function parseFlickXml(xmlString: string): {
+  width: number;
+  height: number;
+  fps: number;
+  totalFrames: number;
+  background: BackgroundSettings;
+  layers: AnimationLayer[];
+} {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlString, 'application/xml');
+  const root = doc.documentElement;
+
+  const width = Number(root.getAttribute('width'));
+  const height = Number(root.getAttribute('height'));
+  const fps = Number(root.getAttribute('fps'));
+  const totalFrames = Number(root.getAttribute('frames'));
+
+  // Background
+  const bgEl = root.querySelector('background');
+  let background: BackgroundSettings = { type: 'none', color: '#ffffff', imageData: '' };
+  if (bgEl) {
+    const bgType = (bgEl.getAttribute('type') || 'none') as BackgroundType;
+    if (bgType === 'image') {
+      const imgData = bgEl.querySelector('image-data');
+      background = { type: 'image', color: '#ffffff', imageData: imgData?.textContent ?? '' };
+    } else {
+      background = { type: bgType, color: bgEl.getAttribute('color') || '#ffffff', imageData: '' };
+    }
+  }
+
+  // Layers
+  const serializer = new XMLSerializer();
+  const layers: AnimationLayer[] = [];
+  for (const layerEl of Array.from(root.querySelectorAll('layer'))) {
+    const keyframes: Keyframe[] = [];
+    for (const kfEl of Array.from(layerEl.querySelectorAll('keyframe'))) {
+      const svgEl = kfEl.querySelector('svg');
+      const svgContent = svgEl ? serializer.serializeToString(svgEl) : '';
+      keyframes.push({
+        frame: Number(kfEl.getAttribute('frame')),
+        svgContent,
+        tween: (kfEl.getAttribute('tween') || 'linear') as TweenType,
+        easing: (kfEl.getAttribute('easing') || 'in-out') as EasingDirection,
+      });
+    }
+    keyframes.sort((a, b) => a.frame - b.frame);
+
+    layers.push({
+      id: layerEl.getAttribute('id') || '',
+      renderVisible: layerEl.getAttribute('render-visible') !== 'false',
+      viewportVisible: layerEl.getAttribute('viewport-visible') !== 'false',
+      clipLayerId: layerEl.getAttribute('clip') || null,
+      maskLayerId: layerEl.getAttribute('mask') || null,
+      loop: layerEl.getAttribute('loop') === 'true',
+      ghostEndFrame: layerEl.getAttribute('ghost-end-frame') === 'true',
+      keyframes,
+    });
+  }
+
+  return { width, height, fps, totalFrames, background, layers };
 }
 
 /** Extract inner content from an SVG string (everything inside the root <svg> tag) */
@@ -352,13 +419,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   // ── Project lifecycle ───────────────────────────────────
 
-  newProject: async ({ projectDir, width, height, fps, totalFrames }) => {
-    const api = window.api;
-
-    await api.mkdir(projectDir);
-    await api.mkdir(await api.pathJoin(projectDir, 'layers'));
-    await api.mkdir(await api.pathJoin(projectDir, '.cache'));
-
+  newProject: async ({ filePath, width, height, fps, totalFrames }) => {
     const initialLayer: AnimationLayer = {
       id: 'layer-1',
       renderVisible: true,
@@ -370,10 +431,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       keyframes: [],
     };
 
-    await api.mkdir(await api.pathJoin(projectDir, 'layers', initialLayer.id));
-
     set({
-      projectPath: projectDir,
+      projectPath: filePath,
       dirty: false,
       width,
       height,
@@ -393,82 +452,20 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       canRedo: false,
     });
 
-    const state = get();
-    await api.writeFile(
-      await api.pathJoin(projectDir, 'project.json'),
-      buildProjectJson(state)
-    );
+    await window.api.writeFile(filePath, buildFlickXml(get()));
   },
 
-  openProject: async (projectDir: string) => {
-    const api = window.api;
-
-    const jsonPath = await api.pathJoin(projectDir, 'project.json');
-    const raw = await api.readFile(jsonPath);
-    const proj = JSON.parse(raw);
-
-    const width = Number(proj.width);
-    const height = Number(proj.height);
-
-    // Read background settings (backward-compatible default)
-    const background: BackgroundSettings = proj.background
-      ? { type: proj.background.type || 'none', color: proj.background.color || '#ffffff', imageData: proj.background.imageData || '' }
-      : { type: 'none', color: '#ffffff', imageData: '' };
-
-    // Build lookup for keyframe metadata from project.json
-    const kfMetaMap = new Map<string, Map<number, { tween: TweenType; easing: EasingDirection }>>();
-    for (const layerDef of proj.layers) {
-      const frameMeta = new Map<number, { tween: TweenType; easing: EasingDirection }>();
-      if (Array.isArray(layerDef.keyframes)) {
-        for (const km of layerDef.keyframes) {
-          frameMeta.set(km.frame, {
-            tween: km.tween || 'linear',
-            easing: km.easing || 'in-out',
-          });
-        }
-      }
-      kfMetaMap.set(layerDef.id, frameMeta);
-    }
-
-    const layers: AnimationLayer[] = [];
-    for (const layerDef of proj.layers) {
-      const layerDir = await api.pathJoin(projectDir, 'layers', layerDef.id);
-      const files = await api.readdir(layerDir);
-      const meta = kfMetaMap.get(layerDef.id);
-
-      const keyframes: Keyframe[] = [];
-      for (const file of files.sort()) {
-        if (!file.startsWith('kf_') || !file.endsWith('.svg')) continue;
-        const frameNum = parseInt(file.replace('kf_', '').replace('.svg', ''), 10);
-        const svgContent = await api.readFile(await api.pathJoin(layerDir, file));
-        const m = meta?.get(frameNum);
-        keyframes.push({
-          frame: frameNum,
-          svgContent,
-          tween: m?.tween ?? 'linear',
-          easing: m?.easing ?? 'in-out',
-        });
-      }
-
-      layers.push({
-        id: layerDef.id,
-        renderVisible: layerDef.renderVisible !== false,
-        viewportVisible: layerDef.viewportVisible !== false,
-        clipLayerId: layerDef.clipLayerId || null,
-        maskLayerId: layerDef.maskLayerId || null,
-        loop: layerDef.loop === true,
-        ghostEndFrame: layerDef.ghostEndFrame === true,
-        keyframes,
-      });
-    }
+  openProject: async (filePath: string) => {
+    const raw = await window.api.readFile(filePath);
+    const { width, height, fps, totalFrames, background, layers } = parseFlickXml(raw);
 
     set({
-      projectPath: projectDir,
+      projectPath: filePath,
       dirty: false,
       width,
       height,
-      fps: Number(proj.fps),
-      totalFrames: Number(proj.frames),
+      fps,
+      totalFrames,
       background,
       layers,
       selectedLayerId: layers.length > 0 ? layers[0].id : null,
@@ -489,48 +486,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   saveProject: async () => {
     const state = get();
     if (!state.projectPath) return;
-    const api = window.api;
-
-    await api.writeFile(
-      await api.pathJoin(state.projectPath, 'project.json'),
-      buildProjectJson(state)
-    );
-
-    const layersDir = await api.pathJoin(state.projectPath, 'layers');
-    const layerIdsOnDisk = await api.exists(layersDir) ? await api.readdir(layersDir) : [];
-    const activeLayerIds = new Set(state.layers.map((l) => l.id));
-
-    // Remove layer directories that no longer exist in state
-    for (const dirName of layerIdsOnDisk) {
-      if (!activeLayerIds.has(dirName)) {
-        await api.rmdir(await api.pathJoin(layersDir, dirName));
-      }
-    }
-
-    // Write active layers and clean up stale keyframe files
-    for (const layer of state.layers) {
-      const layerDir = await api.pathJoin(layersDir, layer.id);
-      await api.mkdir(layerDir);
-
-      const activeFiles = new Set(layer.keyframes.map((kf) => frameToFilename(kf.frame)));
-      const filesOnDisk = await api.readdir(layerDir);
-
-      // Remove keyframe files that no longer exist in state
-      for (const file of filesOnDisk) {
-        if (file.endsWith('.svg') && !activeFiles.has(file)) {
-          await api.rm(await api.pathJoin(layerDir, file));
-        }
-      }
-
-      // Write current keyframes
-      for (const kf of layer.keyframes) {
-        await api.writeFile(
-          await api.pathJoin(layerDir, frameToFilename(kf.frame)),
-          kf.svgContent
-        );
-      }
-    }
-
+    await window.api.writeFile(state.projectPath, buildFlickXml(state));
     set({ dirty: false });
   },
 
@@ -556,11 +512,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       ghostEndFrame: false,
       keyframes: [],
     };
-
-    if (state.projectPath) {
-      const api = window.api;
-      await api.mkdir(await api.pathJoin(state.projectPath, 'layers', id));
-    }
 
     set((s) => ({
       layers: [newLayer, ...s.layers],
@@ -679,14 +630,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
     } else {
       svgContent = blankSvg(state.width, state.height);
-    }
-
-    if (state.projectPath) {
-      const api = window.api;
-      const filePath = await api.pathJoin(
-        state.projectPath, 'layers', layerId, frameToFilename(frame)
-      );
-      await api.writeFile(filePath, svgContent);
     }
 
     set((s) => ({
@@ -910,28 +853,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     if (!state.editingKeyframe || !state.projectPath) return;
     const api = window.api;
 
-    const { layerId, frame, filePath: workingPath } = state.editingKeyframe;
+    const { layerId, frame } = state.editingKeyframe;
     const layer = state.layers.find((l) => l.id === layerId);
     if (!layer) return;
 
     const kf = layer.keyframes.find((k) => k.frame === frame);
     if (!kf) return;
-
-    const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
-    await api.mkdir(editDir);
-
-    // Rebuild context layer SVGs
-    const contextRefs: { id: string; filePath: string }[] = [];
-    for (const otherLayer of state.layers) {
-      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
-
-      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
-      if (!nearestKf) continue;
-
-      const ctxPath = await api.pathJoin(editDir, `context_${otherLayer.id}.svg`);
-      await api.writeFile(ctxPath, nearestKf.svgContent);
-      contextRefs.push({ id: otherLayer.id, filePath: ctxPath });
-    }
 
     const editableContent = extractSvgInnerContent(kf.svgContent);
 
@@ -947,12 +874,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       contextLayers += `  </g>\n`;
     }
 
-    for (const ctx of contextRefs) {
-      const fileUri = ctx.filePath.replace(/\\/g, '/');
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${ctx.id}" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="file:///${fileUri}" width="${state.width}" height="${state.height}" />\n`;
+    for (const otherLayer of state.layers) {
+      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
+      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
+      if (!nearestKf) continue;
+      const b64 = btoa(nearestKf.svgContent);
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${otherLayer.id}" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="data:image/svg+xml;base64,${b64}" width="${state.width}" height="${state.height}" />\n`;
       contextLayers += `  </g>\n`;
     }
+
+    const flickName = state.projectPath.split(/[\\/]/).pop()!;
+    const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
 
     const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
@@ -965,9 +898,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 </svg>`;
 
     try {
-      await api.inkscapeLoad(workingPath, workingSvg);
+      await api.inkscapeLoad(inkscapeFilename, workingSvg);
     } catch {
-      // Inkscape may have closed; stop editing
       clearEditing();
     }
   },
@@ -993,22 +925,6 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       clearEditing();
     }
 
-    const editDir = await api.pathJoin(state.projectPath, '.cache', 'edit');
-    await api.mkdir(editDir);
-
-    // Write context layer SVGs to disk (Inkscape loads them via file:// refs)
-    const contextRefs: { id: string; filePath: string }[] = [];
-    for (const otherLayer of state.layers) {
-      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
-
-      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
-      if (!nearestKf) continue;
-
-      const ctxPath = await api.pathJoin(editDir, `context_${otherLayer.id}.svg`);
-      await api.writeFile(ctxPath, nearestKf.svgContent);
-      contextRefs.push({ id: otherLayer.id, filePath: ctxPath });
-    }
-
     const editableContent = extractSvgInnerContent(kf.svgContent);
 
     let contextLayers = '';
@@ -1024,12 +940,18 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       contextLayers += `  </g>\n`;
     }
 
-    for (const ctx of contextRefs) {
-      const fileUri = ctx.filePath.replace(/\\/g, '/');
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${ctx.id}" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="file:///${fileUri}" width="${state.width}" height="${state.height}" />\n`;
+    for (const otherLayer of state.layers) {
+      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
+      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
+      if (!nearestKf) continue;
+      const b64 = btoa(nearestKf.svgContent);
+      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${otherLayer.id}" sodipodi:insensitive="true">\n`;
+      contextLayers += `    <image href="data:image/svg+xml;base64,${b64}" width="${state.width}" height="${state.height}" />\n`;
       contextLayers += `  </g>\n`;
     }
+
+    const flickName = state.projectPath.split(/[\\/]/).pop()!;
+    const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
 
     const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
@@ -1040,10 +962,6 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 ${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
 ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 </svg>`;
-
-    // Full path used as Inkscape document filename for proper file:// resolution
-    const frameStr = String(frame).padStart(3, '0');
-    const workingPath = await api.pathJoin(editDir, `editing_${layerId}_kf${frameStr}.svg`);
 
     // Set up pipe-mode listeners
     const saveCleanup = api.onInkscapeSaved((_filename: string, svgContent: string) => {
@@ -1067,15 +985,11 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     (get() as any)._redoCleanup = redoCleanup;
 
     set({
-      editingKeyframe: {
-        layerId,
-        frame,
-        filePath: workingPath,
-      },
+      editingKeyframe: { layerId, frame },
     });
 
     try {
-      await api.inkscapeLoad(workingPath, workingSvg);
+      await api.inkscapeLoad(inkscapeFilename, workingSvg);
     } catch {
       clearEditing();
     }
@@ -1083,11 +997,10 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
   handleInkscapeSave: async (svgContent: string) => {
     const state = get();
-    if (!state.editingKeyframe || !state.projectPath) return;
+    if (!state.editingKeyframe) return;
 
     pushUndo();
 
-    const api = window.api;
     const { layerId, frame } = state.editingKeyframe;
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1140,11 +1053,6 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
     const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
     const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsBlock}${innerContent.trim()}\n</svg>`;
-
-    const kfPath = await api.pathJoin(
-      state.projectPath, 'layers', layerId, frameToFilename(frame)
-    );
-    await api.writeFile(kfPath, cleanSvg);
 
     set({ dirty: true });
     set((s) => ({

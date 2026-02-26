@@ -15,17 +15,16 @@ export function NewProjectDialog({ onClose }: NewProjectDialogProps) {
   const newProject = useProjectStore((s) => s.newProject);
 
   const handleCreate = async () => {
-    // Ask user to pick or create the project folder directly
-    const result = await window.api.showOpenDialog({
-      title: 'Choose project folder',
-      properties: ['openDirectory', 'createDirectory'],
+    const result = await window.api.showSaveDialog({
+      title: 'Create new project',
+      filters: [{ name: 'Flick Project', extensions: ['flick'] }],
     });
-    if (result.canceled || result.filePaths.length === 0) return;
+    if (result.canceled || !result.filePath) return;
 
     setSaving(true);
     try {
       await newProject({
-        projectDir: result.filePaths[0],
+        filePath: result.filePath,
         width,
         height,
         fps,

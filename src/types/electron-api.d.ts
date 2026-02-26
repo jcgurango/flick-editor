@@ -3,9 +3,6 @@ export interface ElectronAPI {
   readFile(filePath: string): Promise<string>;
   writeFile(filePath: string, data: string): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
-  readdir(dirPath: string): Promise<string[]>;
-  rm(filePath: string): Promise<void>;
-  rmdir(dirPath: string): Promise<void>;
   exists(filePath: string): Promise<boolean>;
   readFileAsDataUrl(filePath: string): Promise<string>;
 
@@ -38,10 +35,6 @@ export interface ElectronAPI {
   onInkscapeUndo(callback: () => void): () => void;
   onInkscapeRedo(callback: () => void): () => void;
 
-  // File watching
-  watchFile(filePath: string): Promise<void>;
-  unwatchFile(filePath: string): Promise<void>;
-  onFileChanged(callback: (filePath: string) => void): () => void;
 }
 
 declare global {

@@ -21,8 +21,6 @@ function writeConfig(config) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 }
 
-// Track active file watchers: filePath -> fs.FSWatcher
-const watchers = new Map();
 let mainWindow = null;
 
 function createWindow() {
@@ -65,17 +63,6 @@ ipcMain.handle('fs:mkdir', async (_event, dirPath) => {
   await fs.promises.mkdir(dirPath, { recursive: true });
 });
 
-ipcMain.handle('fs:readdir', async (_event, dirPath) => {
-  return fs.promises.readdir(dirPath);
-});
-
-ipcMain.handle('fs:rm', async (_event, filePath) => {
-  await fs.promises.unlink(filePath);
-});
-
-ipcMain.handle('fs:rmdir', async (_event, dirPath) => {
-  await fs.promises.rm(dirPath, { recursive: true, force: true });
-});
 
 ipcMain.handle('fs:readFileDataUrl', async (_event, filePath) => {
   const buf = await fs.promises.readFile(filePath);
@@ -301,45 +288,11 @@ ipcMain.handle('inkscape:load', async (_event, filename, svgData) => {
   inkscapeProc.stdin.write(buf);
 });
 
-// ── File Watching ─────────────────────────────────────────
-
-ipcMain.handle('watch:start', async (_event, filePath) => {
-  // Don't double-watch
-  if (watchers.has(filePath)) return;
-
-  let debounceTimer = null;
-  const watcher = fs.watch(filePath, () => {
-    // 200ms debounce
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('watch:changed', filePath);
-      }
-    }, 200);
-  });
-
-  watchers.set(filePath, watcher);
-});
-
-ipcMain.handle('watch:stop', async (_event, filePath) => {
-  const watcher = watchers.get(filePath);
-  if (watcher) {
-    watcher.close();
-    watchers.delete(filePath);
-  }
-});
-
 // ── App lifecycle ─────────────────────────────────────────
 
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
-  // Clean up all watchers
-  for (const watcher of watchers.values()) {
-    watcher.close();
-  }
-  watchers.clear();
-
   // Kill Inkscape pipe-mode process
   if (inkscapeProc && !inkscapeProc.killed) {
     inkscapeProc.stdin.end();

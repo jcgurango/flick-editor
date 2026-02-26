@@ -45,7 +45,8 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
 
     await saveSettings();
 
-    const exportDir = await api.pathJoin(projectPath, 'export');
+    const dir = await api.dirname(projectPath);
+    const exportDir = await api.pathJoin(dir, 'export');
     await api.mkdir(exportDir);
 
     setExporting(true);

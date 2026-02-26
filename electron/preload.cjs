@@ -5,9 +5,6 @@ contextBridge.exposeInMainWorld('api', {
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', filePath, data),
   mkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', dirPath),
-  readdir: (dirPath) => ipcRenderer.invoke('fs:readdir', dirPath),
-  rm: (filePath) => ipcRenderer.invoke('fs:rm', filePath),
-  rmdir: (dirPath) => ipcRenderer.invoke('fs:rmdir', dirPath),
   exists: (filePath) => ipcRenderer.invoke('fs:exists', filePath),
   readFileAsDataUrl: (filePath) => ipcRenderer.invoke('fs:readFileDataUrl', filePath),
 
@@ -46,12 +43,4 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('inkscape:redo', listener);
   },
 
-  // File watching
-  watchFile: (filePath) => ipcRenderer.invoke('watch:start', filePath),
-  unwatchFile: (filePath) => ipcRenderer.invoke('watch:stop', filePath),
-  onFileChanged: (callback) => {
-    const listener = (_event, filePath) => callback(filePath);
-    ipcRenderer.on('watch:changed', listener);
-    return () => ipcRenderer.removeListener('watch:changed', listener);
-  },
 });
