@@ -34,6 +34,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      webSecurity: false, // allow file:// refs in SVG images
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
@@ -64,13 +65,6 @@ ipcMain.handle('fs:mkdir', async (_event, dirPath) => {
 });
 
 
-ipcMain.handle('fs:readFileDataUrl', async (_event, filePath) => {
-  const buf = await fs.promises.readFile(filePath);
-  const ext = path.extname(filePath).toLowerCase().slice(1);
-  const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp' };
-  const mime = mimeMap[ext] || 'application/octet-stream';
-  return `data:${mime};base64,${buf.toString('base64')}`;
-});
 
 ipcMain.handle('fs:exists', async (_event, filePath) => {
   try {

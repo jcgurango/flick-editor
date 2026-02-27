@@ -6,7 +6,6 @@ contextBridge.exposeInMainWorld('api', {
   writeFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', filePath, data),
   mkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', dirPath),
   exists: (filePath) => ipcRenderer.invoke('fs:exists', filePath),
-  readFileAsDataUrl: (filePath) => ipcRenderer.invoke('fs:readFileDataUrl', filePath),
 
   // Path utilities
   pathJoin: (...segments) => ipcRenderer.invoke('path:join', ...segments),

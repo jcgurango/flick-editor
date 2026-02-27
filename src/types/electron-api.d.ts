@@ -4,7 +4,6 @@ export interface ElectronAPI {
   writeFile(filePath: string, data: string): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
   exists(filePath: string): Promise<boolean>;
-  readFileAsDataUrl(filePath: string): Promise<string>;
 
   // Path utilities
   pathJoin(...segments: string[]): Promise<string>;

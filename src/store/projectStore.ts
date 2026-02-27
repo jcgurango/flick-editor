@@ -11,7 +11,7 @@ export type BackgroundType = 'none' | 'solid' | 'image';
 export interface BackgroundSettings {
   type: BackgroundType;
   color: string;       // hex, used when type === 'solid'
-  imageData: string;   // data URL, used when type === 'image'
+  imageData: string;   // URL (file:/// or http://), used when type === 'image'
 }
 
 export interface Keyframe {

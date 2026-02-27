@@ -49,7 +49,6 @@ export function Inspector() {
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const selectedLayerId = useProjectStore((s) => s.selectedLayerId);
   const layers = useProjectStore((s) => s.layers);
-  const projectPath = useProjectStore((s) => s.projectPath);
   const setProjectDimensions = useProjectStore((s) => s.setProjectDimensions);
   const setFps = useProjectStore((s) => s.setFps);
   const setTotalFrames = useProjectStore((s) => s.setTotalFrames);
@@ -82,8 +81,8 @@ export function Inspector() {
       properties: ['openFile'],
     });
     if (result.canceled || result.filePaths.length === 0) return;
-    const dataUrl = await window.api.readFileAsDataUrl(result.filePaths[0]);
-    setBackground({ imageData: dataUrl });
+    const fileUrl = 'file:///' + result.filePaths[0].replace(/\\/g, '/');
+    setBackground({ imageData: fileUrl });
   };
 
   const browseInkscape = async () => {
@@ -138,7 +137,7 @@ export function Inspector() {
             <label>Image</label>
             <div className="inspector-path-row">
               <span className="inspector-path-value">
-                {background.imageData ? '(embedded)' : '(none)'}
+                {background.imageData ? background.imageData.split('/').pop() : '(none)'}
               </span>
               <button className="inspector-browse-btn" onClick={browseBackgroundImage}>
                 ...
@@ -277,14 +276,6 @@ export function Inspector() {
         </div>
       </div>
 
-      {!projectPath && (
-        <div className="inspector-section">
-          <div className="inspector-empty">
-            No project open.<br />
-            Use File &gt; New Project or File &gt; Open.
-          </div>
-        </div>
-      )}
     </div>
   );
 }
