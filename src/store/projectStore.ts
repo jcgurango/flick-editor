@@ -111,13 +111,7 @@ export interface ProjectState {
 
   // ── Project lifecycle ─────────────────────────────────
 
-  newProject: (params: {
-    filePath: string;
-    width: number;
-    height: number;
-    fps: number;
-    totalFrames: number;
-  }) => Promise<void>;
+  newProject: () => void;
 
   openProject: (filePath: string) => Promise<void>;
   saveProject: () => Promise<void>;
@@ -354,8 +348,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   totalFrames: 60,
   background: { type: 'none', color: '#ffffff', imageData: '' },
 
-  layers: [],
-  selectedLayerId: null,
+  layers: [{
+    id: 'layer-1',
+    renderVisible: true,
+    viewportVisible: true,
+    clipLayerId: null,
+    maskLayerId: null,
+    loop: false,
+    ghostEndFrame: false,
+    keyframes: [],
+  }],
+  selectedLayerId: 'layer-1',
   currentFrame: 0,
 
   selection: null,
@@ -419,28 +422,27 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   // ── Project lifecycle ───────────────────────────────────
 
-  newProject: async ({ filePath, width, height, fps, totalFrames }) => {
-    const initialLayer: AnimationLayer = {
-      id: 'layer-1',
-      renderVisible: true,
-      viewportVisible: true,
-      clipLayerId: null,
-      maskLayerId: null,
-      loop: false,
-      ghostEndFrame: false,
-      keyframes: [],
-    };
-
+  newProject: () => {
+    clearEditing();
     set({
-      projectPath: filePath,
+      projectPath: null,
       dirty: false,
-      width,
-      height,
-      fps,
-      totalFrames,
+      width: 1920,
+      height: 1080,
+      fps: 24,
+      totalFrames: 60,
       background: { type: 'none', color: '#ffffff', imageData: '' },
-      layers: [initialLayer],
-      selectedLayerId: initialLayer.id,
+      layers: [{
+        id: 'layer-1',
+        renderVisible: true,
+        viewportVisible: true,
+        clipLayerId: null,
+        maskLayerId: null,
+        loop: false,
+        ghostEndFrame: false,
+        keyframes: [],
+      }],
+      selectedLayerId: 'layer-1',
       currentFrame: 0,
       compositedSvg: '',
       editingKeyframe: null,
@@ -451,8 +453,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       canUndo: false,
       canRedo: false,
     });
-
-    await window.api.writeFile(filePath, buildFlickXml(get()));
   },
 
   openProject: async (filePath: string) => {
@@ -484,9 +484,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   },
 
   saveProject: async () => {
-    const state = get();
-    if (!state.projectPath) return;
-    await window.api.writeFile(state.projectPath, buildFlickXml(state));
+    let { projectPath } = get();
+    if (!projectPath) {
+      const result = await window.api.showSaveDialog({
+        title: 'Save project',
+        filters: [{ name: 'Flick Project', extensions: ['flick'] }],
+      });
+      if (result.canceled || !result.filePath) return;
+      projectPath = result.filePath;
+      set({ projectPath });
+    }
+    await window.api.writeFile(projectPath, buildFlickXml(get()));
     set({ dirty: false });
   },
 
@@ -850,7 +858,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   reloadInkscapeDocument: async () => {
     const state = get();
-    if (!state.editingKeyframe || !state.projectPath) return;
+    if (!state.editingKeyframe) return;
     const api = window.api;
 
     const { layerId, frame } = state.editingKeyframe;
@@ -884,7 +892,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       contextLayers += `  </g>\n`;
     }
 
-    const flickName = state.projectPath.split(/[\\/]/).pop()!;
+    const flickName = state.projectPath ? state.projectPath.split(/[\\/]/).pop()! : 'Untitled Flick Project';
     const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
 
     const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
@@ -908,7 +916,6 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
   startEditing: async (layerId: string, frame: number) => {
     const state = get();
-    if (!state.projectPath) return;
     const api = window.api;
 
     const layer = state.layers.find((l) => l.id === layerId);
@@ -950,7 +957,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       contextLayers += `  </g>\n`;
     }
 
-    const flickName = state.projectPath.split(/[\\/]/).pop()!;
+    const flickName = state.projectPath ? state.projectPath.split(/[\\/]/).pop()! : 'Untitled Flick Project';
     const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
 
     const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>

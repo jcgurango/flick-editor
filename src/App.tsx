@@ -100,7 +100,7 @@ function App() {
       if (e.key === 'F6' || e.key === 'F7') {
         e.preventDefault();
         const state = useProjectStore.getState();
-        if (state.selectedLayerId && state.projectPath) {
+        if (state.selectedLayerId) {
           addKeyframe(state.selectedLayerId, state.currentFrame, e.key === 'F6');
         }
       }

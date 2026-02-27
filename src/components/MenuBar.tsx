@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import { NewProjectDialog } from './NewProjectDialog';
 import { ExportDialog } from './ExportDialog';
 
 interface MenuItemDef {
@@ -18,11 +17,11 @@ interface MenuDef {
 
 export function MenuBar() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [showNewProject, setShowNewProject] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const menuBarRef = useRef<HTMLDivElement>(null);
   const resetCanvasView = useProjectStore((s) => s.resetCanvasView);
   const setCanvasZoom100 = useProjectStore((s) => s.setCanvasZoom100);
+  const newProject = useProjectStore((s) => s.newProject);
   const openProject = useProjectStore((s) => s.openProject);
   const saveProject = useProjectStore((s) => s.saveProject);
   const projectPath = useProjectStore((s) => s.projectPath);
@@ -65,7 +64,7 @@ export function MenuBar() {
           label: 'New Project',
           action: () => {
             setOpenMenu(null);
-            setShowNewProject(true);
+            newProject();
           },
         },
         { label: 'Open...', action: handleOpen },
@@ -194,15 +193,10 @@ export function MenuBar() {
             )}
           </div>
         ))}
-        {projectPath && (
-          <div className="menu-bar-project-name">
-            {projectPath.split(/[\\/]/).pop()}{dirty ? ' *' : ''}
-          </div>
-        )}
+        <div className="menu-bar-project-name">
+          {projectPath ? projectPath.split(/[\\/]/).pop() : 'Untitled'}{dirty ? ' *' : ''}
+        </div>
       </div>
-      {showNewProject && (
-        <NewProjectDialog onClose={() => setShowNewProject(false)} />
-      )}
       {showExport && (
         <ExportDialog onClose={() => setShowExport(false)} />
       )}

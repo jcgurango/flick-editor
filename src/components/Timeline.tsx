@@ -12,7 +12,6 @@ export function Timeline() {
   const toggleViewportVisible = useProjectStore((s) => s.toggleViewportVisible);
   const addKeyframe = useProjectStore((s) => s.addKeyframe);
   const startEditing = useProjectStore((s) => s.startEditing);
-  const projectPath = useProjectStore((s) => s.projectPath);
   const selection = useProjectStore((s) => s.selection);
   const setSelectionAnchor = useProjectStore((s) => s.setSelectionAnchor);
   const setSelectionEnd = useProjectStore((s) => s.setSelectionEnd);
@@ -194,7 +193,6 @@ export function Timeline() {
   // ── Double-click to edit ────────────────────────────────
 
   const handleDoubleClickCell = (layerId: string, frame: number) => {
-    if (!projectPath) return;
     const layer = layers.find((l) => l.id === layerId);
     if (!layer) return;
     if (layer.keyframes.some((kf) => kf.frame === frame)) {
@@ -205,7 +203,7 @@ export function Timeline() {
   // ── Keyframe helpers ────────────────────────────────────
 
   const handleAddKeyframe = (fromReference: boolean) => {
-    if (!selectedLayerId || !projectPath) return;
+    if (!selectedLayerId) return;
     addKeyframe(selectedLayerId, currentFrame, fromReference);
   };
 
@@ -220,26 +218,22 @@ export function Timeline() {
         <div className="timeline-layers-header">
           <span>Layers</span>
           <div className="timeline-header-actions">
-            {projectPath && (
-              <>
-                <button
-                  className="timeline-add-kf"
-                  onClick={() => handleAddKeyframe(true)}
-                  title="Add keyframe from nearest reference (F6)"
-                  disabled={!selectedLayerId}
-                >
-                  +KF
-                </button>
-                <button
-                  className="timeline-add-kf"
-                  onClick={() => handleAddKeyframe(false)}
-                  title="Add empty keyframe (F7)"
-                  disabled={!selectedLayerId}
-                >
-                  +E
-                </button>
-              </>
-            )}
+            <button
+              className="timeline-add-kf"
+              onClick={() => handleAddKeyframe(true)}
+              title="Add keyframe from nearest reference (F6)"
+              disabled={!selectedLayerId}
+            >
+              +KF
+            </button>
+            <button
+              className="timeline-add-kf"
+              onClick={() => handleAddKeyframe(false)}
+              title="Add empty keyframe (F7)"
+              disabled={!selectedLayerId}
+            >
+              +E
+            </button>
             <button
               className="timeline-add-layer"
               onClick={() => addLayer()}
