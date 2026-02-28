@@ -1325,8 +1325,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     const svgRoot = doc.documentElement;
     const newSvgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${serializeChildren(svgRoot).trim()}\n</svg>`;
 
-    // Update store
-    pushUndo();
+    // Update store — no pushUndo() here; the preceding SAVE already pushed
+    // the pre-group state, so undo skips the intermediate grouped state.
     set((s) => ({
       clips: [...s.clips, newClip],
       layers: s.layers.map((l) => {
