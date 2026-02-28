@@ -42,4 +42,13 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('inkscape:redo', listener);
   },
 
+  // Clip management
+  inkscapeClip: (clipId, clipName, svgData) => ipcRenderer.invoke('inkscape:clip', clipId, clipName, svgData),
+  inkscapeUclip: (clipId) => ipcRenderer.invoke('inkscape:uclip', clipId),
+  onInkscapeNClip: (callback) => {
+    const listener = (_event, elementId) => callback(elementId);
+    ipcRenderer.on('inkscape:nclip', listener);
+    return () => ipcRenderer.removeListener('inkscape:nclip', listener);
+  },
+
 });

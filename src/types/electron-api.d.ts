@@ -34,6 +34,11 @@ export interface ElectronAPI {
   onInkscapeUndo(callback: () => void): () => void;
   onInkscapeRedo(callback: () => void): () => void;
 
+  // Clip management
+  inkscapeClip(clipId: string, clipName: string, svgData: string): Promise<void>;
+  inkscapeUclip(clipId: string): Promise<void>;
+  onInkscapeNClip(callback: (elementId: string) => void): () => void;
+
 }
 
 declare global {

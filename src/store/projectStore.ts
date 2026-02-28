@@ -32,6 +32,15 @@ export interface AnimationLayer {
   keyframes: Keyframe[]; // Sorted by frame
 }
 
+export interface MovieClip {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  totalFrames: number;
+  layers: AnimationLayer[];
+}
+
 export interface EditingState {
   layerId: string;
   frame: number;
@@ -69,20 +78,19 @@ export function selectionRect(sel: TimelineSelection) {
   };
 }
 
-export interface ProjectState {
+export interface ProjectState extends MovieClip {
   // Project metadata
   projectPath: string | null;
   dirty: boolean;
 
   // Project settings
-  width: number;
-  height: number;
   fps: number;
-  totalFrames: number;
   background: BackgroundSettings;
 
+  // Movie clips
+  clips: MovieClip[];
+
   // Timeline
-  layers: AnimationLayer[];
   selectedLayerId: string | null;
   currentFrame: number;  // 0-indexed internally
 
@@ -176,6 +184,11 @@ export interface ProjectState {
   play: () => void;
   stop: () => void;
 
+  // ── Movie Clips ──────────────────────────────────────
+
+  handleNClip: (elementId: string) => void;
+  syncClipsToInkscape: () => void;
+
   // ── Compositor ────────────────────────────────────────
 
   recomposite: () => void;
@@ -209,6 +222,25 @@ function escXml(s: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
+/** Serialize layers to XML with configurable indent */
+function serializeLayersXml(layers: AnimationLayer[], indent: string): string {
+  let xml = '';
+  for (const layer of layers) {
+    xml += `${indent}<layer id="${escXml(layer.id)}" render-visible="${layer.renderVisible}" viewport-visible="${layer.viewportVisible}"`;
+    xml += ` clip="${escXml(layer.clipLayerId ?? '')}" mask="${escXml(layer.maskLayerId ?? '')}"`;
+    xml += ` loop="${layer.loop}" ghost-end-frame="${layer.ghostEndFrame}">\n`;
+
+    for (const kf of layer.keyframes) {
+      xml += `${indent}  <keyframe frame="${kf.frame}" tween="${kf.tween}" easing="${kf.easing}">\n`;
+      xml += `${indent}    ${kf.svgContent}\n`;
+      xml += `${indent}  </keyframe>\n`;
+    }
+
+    xml += `${indent}</layer>\n`;
+  }
+  return xml;
+}
+
 /** Serialize the full project state to a .flick XML string */
 function buildFlickXml(state: {
   fps: number;
@@ -217,6 +249,7 @@ function buildFlickXml(state: {
   height: number;
   layers: AnimationLayer[];
   background: BackgroundSettings;
+  clips: MovieClip[];
 }): string {
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
   xml += `<flick version="1" width="${state.width}" height="${state.height}" fps="${state.fps}" frames="${state.totalFrames}">\n`;
@@ -227,22 +260,51 @@ function buildFlickXml(state: {
     xml += `  <background type="${state.background.type}" color="${escXml(state.background.color)}"/>\n`;
   }
 
-  for (const layer of state.layers) {
-    xml += `  <layer id="${escXml(layer.id)}" render-visible="${layer.renderVisible}" viewport-visible="${layer.viewportVisible}"`;
-    xml += ` clip="${escXml(layer.clipLayerId ?? '')}" mask="${escXml(layer.maskLayerId ?? '')}"`;
-    xml += ` loop="${layer.loop}" ghost-end-frame="${layer.ghostEndFrame}">\n`;
-
-    for (const kf of layer.keyframes) {
-      xml += `    <keyframe frame="${kf.frame}" tween="${kf.tween}" easing="${kf.easing}">\n`;
-      xml += `      ${kf.svgContent}\n`;
-      xml += `    </keyframe>\n`;
+  if (state.clips.length > 0) {
+    xml += `  <clips>\n`;
+    for (const clip of state.clips) {
+      xml += `    <clip id="${escXml(clip.id)}" name="${escXml(clip.name)}" width="${clip.width}" height="${clip.height}" frames="${clip.totalFrames}">\n`;
+      xml += serializeLayersXml(clip.layers, '      ');
+      xml += `    </clip>\n`;
     }
-
-    xml += `  </layer>\n`;
+    xml += `  </clips>\n`;
   }
+
+  xml += serializeLayersXml(state.layers, '  ');
 
   xml += `</flick>\n`;
   return xml;
+}
+
+/** Parse layer elements from a container into AnimationLayer[] */
+function parseLayersXml(containerEl: Element, serializer: XMLSerializer): AnimationLayer[] {
+  const layers: AnimationLayer[] = [];
+  for (const layerEl of Array.from(containerEl.querySelectorAll(':scope > layer'))) {
+    const keyframes: Keyframe[] = [];
+    for (const kfEl of Array.from(layerEl.querySelectorAll(':scope > keyframe'))) {
+      const svgEl = kfEl.querySelector('svg');
+      const svgContent = svgEl ? serializer.serializeToString(svgEl) : '';
+      keyframes.push({
+        frame: Number(kfEl.getAttribute('frame')),
+        svgContent,
+        tween: (kfEl.getAttribute('tween') || 'linear') as TweenType,
+        easing: (kfEl.getAttribute('easing') || 'in-out') as EasingDirection,
+      });
+    }
+    keyframes.sort((a, b) => a.frame - b.frame);
+
+    layers.push({
+      id: layerEl.getAttribute('id') || '',
+      renderVisible: layerEl.getAttribute('render-visible') !== 'false',
+      viewportVisible: layerEl.getAttribute('viewport-visible') !== 'false',
+      clipLayerId: layerEl.getAttribute('clip') || null,
+      maskLayerId: layerEl.getAttribute('mask') || null,
+      loop: layerEl.getAttribute('loop') === 'true',
+      ghostEndFrame: layerEl.getAttribute('ghost-end-frame') === 'true',
+      keyframes,
+    });
+  }
+  return layers;
 }
 
 /** Parse a .flick XML string back into project data */
@@ -253,6 +315,7 @@ function parseFlickXml(xmlString: string): {
   totalFrames: number;
   background: BackgroundSettings;
   layers: AnimationLayer[];
+  clips: MovieClip[];
 } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlString, 'application/xml');
@@ -276,42 +339,50 @@ function parseFlickXml(xmlString: string): {
     }
   }
 
-  // Layers
+  // Clips
   const serializer = new XMLSerializer();
-  const layers: AnimationLayer[] = [];
-  for (const layerEl of Array.from(root.querySelectorAll('layer'))) {
-    const keyframes: Keyframe[] = [];
-    for (const kfEl of Array.from(layerEl.querySelectorAll('keyframe'))) {
-      const svgEl = kfEl.querySelector('svg');
-      const svgContent = svgEl ? serializer.serializeToString(svgEl) : '';
-      keyframes.push({
-        frame: Number(kfEl.getAttribute('frame')),
-        svgContent,
-        tween: (kfEl.getAttribute('tween') || 'linear') as TweenType,
-        easing: (kfEl.getAttribute('easing') || 'in-out') as EasingDirection,
+  const clips: MovieClip[] = [];
+  const clipsEl = root.querySelector(':scope > clips');
+  if (clipsEl) {
+    for (const clipEl of Array.from(clipsEl.querySelectorAll(':scope > clip'))) {
+      clips.push({
+        id: clipEl.getAttribute('id') || '',
+        name: clipEl.getAttribute('name') || '',
+        width: Number(clipEl.getAttribute('width')),
+        height: Number(clipEl.getAttribute('height')),
+        totalFrames: Number(clipEl.getAttribute('frames')),
+        layers: parseLayersXml(clipEl, serializer),
       });
     }
-    keyframes.sort((a, b) => a.frame - b.frame);
-
-    layers.push({
-      id: layerEl.getAttribute('id') || '',
-      renderVisible: layerEl.getAttribute('render-visible') !== 'false',
-      viewportVisible: layerEl.getAttribute('viewport-visible') !== 'false',
-      clipLayerId: layerEl.getAttribute('clip') || null,
-      maskLayerId: layerEl.getAttribute('mask') || null,
-      loop: layerEl.getAttribute('loop') === 'true',
-      ghostEndFrame: layerEl.getAttribute('ghost-end-frame') === 'true',
-      keyframes,
-    });
   }
 
-  return { width, height, fps, totalFrames, background, layers };
+  // Layers (direct children of root, not inside clips)
+  const layers = parseLayersXml(root, serializer);
+
+  return { width, height, fps, totalFrames, background, layers, clips };
 }
 
 /** Extract inner content from an SVG string (everything inside the root <svg> tag) */
 function extractSvgInnerContent(svgString: string): string {
   const match = svgString.match(/<svg[^>]*>([\s\S]*)<\/svg>/i);
   return match ? match[1].trim() : '';
+}
+
+/** Compute bounding box of a group element within an SVG string */
+function computeGroupBBox(fullSvgContent: string, groupId: string):
+  { x: number; y: number; width: number; height: number } | null {
+  const container = document.createElement('div');
+  container.style.cssText = 'position:absolute;left:-9999px;top:-9999px;visibility:hidden';
+  document.body.appendChild(container);
+  try {
+    container.innerHTML = fullSvgContent;
+    const el = container.querySelector(`#${CSS.escape(groupId)}`) as SVGGraphicsElement | null;
+    if (!el) return null;
+    const bbox = el.getBBox();
+    return { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height };
+  } finally {
+    document.body.removeChild(container);
+  }
 }
 
 // ── Store ─────────────────────────────────────────────────
@@ -330,7 +401,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const state = get();
     if (!state.editingKeyframe) return;
 
-    for (const key of ['_saveCleanup', '_closeCleanup', '_undoCleanup', '_redoCleanup']) {
+    for (const key of ['_saveCleanup', '_closeCleanup', '_undoCleanup', '_redoCleanup', '_nclipCleanup']) {
       const cleanup = (state as any)[key];
       if (cleanup) cleanup();
     }
@@ -339,6 +410,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   }
 
   return {
+  id: 'root',
+  name: 'Untitled',
   projectPath: null,
   dirty: false,
 
@@ -347,6 +420,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   fps: 24,
   totalFrames: 60,
   background: { type: 'none', color: '#ffffff', imageData: '' },
+
+  clips: [] as MovieClip[],
 
   layers: [{
     id: 'layer-1',
@@ -425,6 +500,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   newProject: () => {
     clearEditing();
     set({
+      id: 'root',
+      name: 'Untitled',
       projectPath: null,
       dirty: false,
       width: 1920,
@@ -432,6 +509,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       fps: 24,
       totalFrames: 60,
       background: { type: 'none', color: '#ffffff', imageData: '' },
+      clips: [],
       layers: [{
         id: 'layer-1',
         renderVisible: true,
@@ -457,7 +535,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   openProject: async (filePath: string) => {
     const raw = await window.api.readFile(filePath);
-    const { width, height, fps, totalFrames, background, layers } = parseFlickXml(raw);
+    const { width, height, fps, totalFrames, background, layers, clips } = parseFlickXml(raw);
 
     set({
       projectPath: filePath,
@@ -467,6 +545,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       fps,
       totalFrames,
       background,
+      clips,
       layers,
       selectedLayerId: layers.length > 0 ? layers[0].id : null,
       currentFrame: 0,
@@ -991,12 +1070,18 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     });
     (get() as any)._redoCleanup = redoCleanup;
 
+    const nclipCleanup = api.onInkscapeNClip((elementId: string) => {
+      get().handleNClip(elementId);
+    });
+    (get() as any)._nclipCleanup = nclipCleanup;
+
     set({
       editingKeyframe: { layerId, frame },
     });
 
     try {
       await api.inkscapeLoad(inkscapeFilename, workingSvg);
+      get().syncClipsToInkscape();
     } catch {
       clearEditing();
     }
@@ -1134,6 +1219,137 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
   stop: () => {
     set({ playing: false });
+  },
+
+  // ── Movie Clips ──────────────────────────────────────────
+
+  handleNClip: (elementId: string) => {
+    const state = get();
+    if (!state.editingKeyframe) return;
+    const api = window.api;
+
+    const { layerId, frame } = state.editingKeyframe;
+    const layer = state.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const kf = layer.keyframes.find((k) => k.frame === frame);
+    if (!kf) return;
+
+    // Compute bounding box
+    const bbox = computeGroupBBox(kf.svgContent, elementId);
+    if (!bbox || bbox.width === 0 || bbox.height === 0) return;
+
+    // Auto-increment clip ID/name
+    let clipNum = 1;
+    while (state.clips.some((c) => c.id === `clip-${clipNum}`)) clipNum++;
+    const clipId = `clip-${clipNum}`;
+    const clipName = `Clip ${clipNum}`;
+
+    // Parse the SVG to extract the group and defs
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(kf.svgContent, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) return;
+
+    const groupEl = doc.getElementById(elementId);
+    if (!groupEl) return;
+
+    const serializer = new XMLSerializer();
+    function serializeChildren(el: Element): string {
+      let out = '';
+      for (let i = 0; i < el.childNodes.length; i++) {
+        out += serializer.serializeToString(el.childNodes[i]);
+      }
+      return out.replace(/<(\/?)svg:/g, '<$1').replace(/\s+xmlns:svg="[^"]*"/g, '');
+    }
+
+    // Collect defs
+    let defsContent = '';
+    for (const defs of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'defs'))) {
+      if (defs.childElementCount > 0) {
+        defsContent += serializeChildren(defs);
+      }
+    }
+
+    // Extract group children
+    const groupChildren = serializeChildren(groupEl);
+
+    // Build clip SVG
+    const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
+    const clipSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="${bbox.x} ${bbox.y} ${bbox.width} ${bbox.height}">\n${defsBlock}${groupChildren.trim()}\n</svg>`;
+
+    // Create MovieClip
+    const newClip: MovieClip = {
+      id: clipId,
+      name: clipName,
+      width: bbox.width,
+      height: bbox.height,
+      totalFrames: 1,
+      layers: [{
+        id: 'layer-1',
+        renderVisible: true,
+        viewportVisible: true,
+        clipLayerId: null,
+        maskLayerId: null,
+        loop: false,
+        ghostEndFrame: false,
+        keyframes: [{
+          frame: 0,
+          svgContent: clipSvg,
+          tween: 'linear' as TweenType,
+          easing: 'in-out' as EasingDirection,
+        }],
+      }],
+    };
+
+    // Replace group with image placeholder in the DOM
+    const b64 = btoa(unescape(encodeURIComponent(clipSvg)));
+    const imageEl = doc.createElementNS(SVG_NS, 'image');
+    imageEl.setAttribute('data-flick-clip', clipId);
+    imageEl.setAttribute('href', `data:image/svg+xml;base64,${b64}`);
+    imageEl.setAttribute('x', String(bbox.x));
+    imageEl.setAttribute('y', String(bbox.y));
+    imageEl.setAttribute('width', String(bbox.width));
+    imageEl.setAttribute('height', String(bbox.height));
+    groupEl.parentNode?.replaceChild(imageEl, groupEl);
+
+    // Re-serialize the keyframe SVG (serializeChildren includes existing defs)
+    const svgRoot = doc.documentElement;
+    const newSvgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${serializeChildren(svgRoot).trim()}\n</svg>`;
+
+    // Update store
+    pushUndo();
+    set((s) => ({
+      clips: [...s.clips, newClip],
+      layers: s.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        return {
+          ...l,
+          keyframes: l.keyframes.map((k) =>
+            k.frame === frame ? { ...k, svgContent: newSvgContent } : k
+          ),
+        };
+      }),
+    }));
+
+    // Register image placeholder with Inkscape's Clip Panel
+    const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="0 0 ${bbox.width} ${bbox.height}">\n<image data-flick-clip="${clipId}" href="data:image/svg+xml;base64,${b64}" width="${bbox.width}" height="${bbox.height}" />\n</svg>`;
+    api.inkscapeClip(clipId, clipName, imageSvg);
+    get().reloadInkscapeDocument();
+    get().recomposite();
+  },
+
+  syncClipsToInkscape: () => {
+    const { clips } = get();
+    const api = window.api;
+    for (const clip of clips) {
+      const firstLayer = clip.layers[0];
+      if (!firstLayer) continue;
+      const firstKf = firstLayer.keyframes[0];
+      if (!firstKf) continue;
+      const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
+      const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${clip.width}" height="${clip.height}" viewBox="0 0 ${clip.width} ${clip.height}">\n<image data-flick-clip="${clip.id}" href="data:image/svg+xml;base64,${b64}" width="${clip.width}" height="${clip.height}" />\n</svg>`;
+      api.inkscapeClip(clip.id, clip.name, imageSvg);
+    }
   },
 
   // ── Compositor ──────────────────────────────────────────

@@ -155,6 +155,13 @@ function parseInkscapeStdout(stream) {
           continue;
         }
 
+        // NCLIP <element-id>
+        const nclipMatch = line.match(/^NCLIP (.+)$/);
+        if (nclipMatch) {
+          mainWindow.webContents.send('inkscape:nclip', nclipMatch[1]);
+          continue;
+        }
+
         // UNDO <id>
         const undoMatch = line.match(/^UNDO (\d+)$/);
         if (undoMatch) {
@@ -280,6 +287,16 @@ ipcMain.handle('inkscape:load', async (_event, filename, svgData) => {
   console.log(`[ink stdin] ${svgData}`);
   inkscapeProc.stdin.write(header);
   inkscapeProc.stdin.write(buf);
+});
+
+ipcMain.handle('inkscape:clip', async (_event, clipId, clipName, svgData) => {
+  const svgBuf = Buffer.from(svgData, 'utf-8');
+  inkscapeProc.stdin.write(`CLIP ${clipId} content-length:${svgBuf.length}\n${clipName}\n`);
+  inkscapeProc.stdin.write(svgBuf);
+});
+
+ipcMain.handle('inkscape:uclip', async (_event, clipId) => {
+  inkscapeProc.stdin.write(`UCLIP ${clipId}\n`);
 });
 
 // ── App lifecycle ─────────────────────────────────────────
