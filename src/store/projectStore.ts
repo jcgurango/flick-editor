@@ -401,7 +401,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const state = get();
     if (!state.editingKeyframe) return;
 
-    for (const key of ['_saveCleanup', '_closeCleanup', '_undoCleanup', '_redoCleanup', '_nclipCleanup']) {
+    for (const key of ['_saveCleanup', '_closeCleanup', '_undoCleanup', '_redoCleanup', '_nclipCleanup', '_requestSaveCleanup']) {
       const cleanup = (state as any)[key];
       if (cleanup) cleanup();
     }
@@ -575,6 +575,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     }
     await window.api.writeFile(projectPath, buildFlickXml(get()));
     set({ dirty: false });
+    if (get().editingKeyframe) {
+      window.api.inkscapeUndirty();
+    }
   },
 
   // ── Layer actions ───────────────────────────────────────
@@ -1075,6 +1078,11 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     });
     (get() as any)._nclipCleanup = nclipCleanup;
 
+    const requestSaveCleanup = api.onInkscapeRequestSave(() => {
+      get().saveProject();
+    });
+    (get() as any)._requestSaveCleanup = requestSaveCleanup;
+
     set({
       editingKeyframe: { layerId, frame },
     });
@@ -1160,6 +1168,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     }));
 
     get().recomposite();
+    window.api.inkscapeDirty();
   },
 
   // ── Timeline / Canvas ───────────────────────────────────
@@ -1334,6 +1343,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     // Register image placeholder with Inkscape's Clip Panel
     const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="0 0 ${bbox.width} ${bbox.height}">\n<image data-flick-clip="${clipId}" href="data:image/svg+xml;base64,${b64}" width="${bbox.width}" height="${bbox.height}" />\n</svg>`;
     api.inkscapeClip(clipId, clipName, imageSvg);
+    api.inkscapeDirty();
     get().reloadInkscapeDocument();
     get().recomposite();
   },

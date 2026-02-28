@@ -39,6 +39,11 @@ export interface ElectronAPI {
   inkscapeUclip(clipId: string): Promise<void>;
   onInkscapeNClip(callback: (elementId: string) => void): () => void;
 
+  // Dirty state sync
+  inkscapeDirty(): Promise<void>;
+  inkscapeUndirty(): Promise<void>;
+  onInkscapeRequestSave(callback: () => void): () => void;
+
 }
 
 declare global {

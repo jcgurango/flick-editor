@@ -155,6 +155,15 @@ function parseInkscapeStdout(stream) {
           continue;
         }
 
+        // REQUESTSAVE <id>
+        const requestSaveMatch = line.match(/^REQUESTSAVE (\d+)$/);
+        if (requestSaveMatch) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inkscape:requestSave');
+          }
+          continue;
+        }
+
         // NCLIP <element-id>
         const nclipMatch = line.match(/^NCLIP (.+)$/);
         if (nclipMatch) {
@@ -297,6 +306,18 @@ ipcMain.handle('inkscape:clip', async (_event, clipId, clipName, svgData) => {
 
 ipcMain.handle('inkscape:uclip', async (_event, clipId) => {
   inkscapeProc.stdin.write(`UCLIP ${clipId}\n`);
+});
+
+ipcMain.handle('inkscape:dirty', async () => {
+  if (inkscapeProc && inkscapeWindowId) {
+    inkscapeProc.stdin.write(`DIRTY ${inkscapeWindowId}\n`);
+  }
+});
+
+ipcMain.handle('inkscape:undirty', async () => {
+  if (inkscapeProc && inkscapeWindowId) {
+    inkscapeProc.stdin.write(`UNDIRTY ${inkscapeWindowId}\n`);
+  }
 });
 
 // ── App lifecycle ─────────────────────────────────────────

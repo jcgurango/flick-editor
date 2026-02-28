@@ -51,4 +51,13 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('inkscape:nclip', listener);
   },
 
+  // Dirty state sync
+  inkscapeDirty: () => ipcRenderer.invoke('inkscape:dirty'),
+  inkscapeUndirty: () => ipcRenderer.invoke('inkscape:undirty'),
+  onInkscapeRequestSave: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('inkscape:requestSave', listener);
+    return () => ipcRenderer.removeListener('inkscape:requestSave', listener);
+  },
+
 });
