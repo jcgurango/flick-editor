@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import type { TweenType, EasingDirection, BackgroundType } from '../store/projectStore';
+import type { TweenType, EasingDirection, BackgroundType, MovieClip } from '../store/projectStore';
 
 /** Small inline numeric input that commits on blur or Enter */
 function NumField({ label, value, onChange, min }: {
@@ -41,7 +41,7 @@ function NumField({ label, value, onChange, min }: {
   );
 }
 
-export function Inspector() {
+export function Inspector({ isClipMode }: { isClipMode: boolean }) {
   const width = useProjectStore((s) => s.width);
   const height = useProjectStore((s) => s.height);
   const fps = useProjectStore((s) => s.fps);
@@ -62,8 +62,18 @@ export function Inspector() {
   const setLayerLoop = useProjectStore((s) => s.setLayerLoop);
   const setLayerGhostEndFrame = useProjectStore((s) => s.setLayerGhostEndFrame);
 
+  const clips = useProjectStore((s) => s.clips);
+  const renameClip = useProjectStore((s) => s.renameClip);
+  const deleteClip = useProjectStore((s) => s.deleteClip);
+  const openClipEditor = useProjectStore((s) => s.openClipEditor);
+
   const selectedLayer = layers.find((l) => l.id === selectedLayerId);
   const currentKeyframe = selectedLayer?.keyframes.find((kf) => kf.frame === currentFrame) ?? null;
+
+  // Inline rename state
+  const [editingClipId, setEditingClipId] = useState<string | null>(null);
+  const [clipDraft, setClipDraft] = useState('');
+  const clipInputRef = useRef<HTMLInputElement>(null);
 
   // Preferences
   const [inkscapePath, setInkscapePath] = useState<string>('');
@@ -103,7 +113,7 @@ export function Inspector() {
         <div className="inspector-section-title">Project</div>
         <NumField label="Width" value={width} onChange={(v) => setProjectDimensions(v, height)} min={1} />
         <NumField label="Height" value={height} onChange={(v) => setProjectDimensions(width, v)} min={1} />
-        <NumField label="FPS" value={fps} onChange={setFps} min={1} />
+        {!isClipMode && <NumField label="FPS" value={fps} onChange={setFps} min={1} />}
         <NumField label="Frames" value={totalFrames} onChange={setTotalFrames} min={1} />
       </div>
 
@@ -154,6 +164,65 @@ export function Inspector() {
           <span className="inspector-value">{Math.round(zoom * 100)}%</span>
         </div>
       </div>
+
+      {!isClipMode && (
+        <div className="inspector-section">
+          <div className="inspector-section-title">Clips</div>
+          {clips.length === 0 ? (
+            <div className="inspector-empty">No clips</div>
+          ) : (
+            <div className="clip-list">
+              {clips.map((clip) => (
+                <div key={clip.id} className="clip-item">
+                  {editingClipId === clip.id ? (
+                    <input
+                      ref={clipInputRef}
+                      className="clip-name-input"
+                      type="text"
+                      value={clipDraft}
+                      onChange={(e) => setClipDraft(e.target.value)}
+                      onBlur={() => {
+                        const trimmed = clipDraft.trim();
+                        if (trimmed && trimmed !== clip.name) renameClip(clip.id, trimmed);
+                        setEditingClipId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') clipInputRef.current?.blur();
+                        if (e.key === 'Escape') setEditingClipId(null);
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="clip-name"
+                      onDoubleClick={() => {
+                        setEditingClipId(clip.id);
+                        setClipDraft(clip.name);
+                        setTimeout(() => clipInputRef.current?.select(), 0);
+                      }}
+                    >
+                      {clip.name}
+                    </span>
+                  )}
+                  <button
+                    className="clip-edit-btn"
+                    onClick={() => openClipEditor(clip.id)}
+                    title="Edit clip"
+                  >
+                    e
+                  </button>
+                  <button
+                    className="clip-delete-btn"
+                    onClick={() => deleteClip(clip.id)}
+                    title="Delete clip"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {selectedLayer && selectedLayerId && (
         <div className="inspector-section">

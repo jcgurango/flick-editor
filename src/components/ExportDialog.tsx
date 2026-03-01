@@ -13,6 +13,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const background = useProjectStore((s) => s.background);
   const projectPath = useProjectStore((s) => s.projectPath);
+  const clips = useProjectStore((s) => s.clips);
 
   const [renderBg, setRenderBg] = useState(true);
   const [exportWidth, setExportWidth] = useState('');
@@ -60,7 +61,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
     for (let f = 0; f < totalFrames; f++) {
       if (cancelRef.current) break;
 
-      const svg = exportFrame(layers, f, width, height, bg, ew, eh, totalFrames);
+      const svg = exportFrame(layers, f, width, height, bg, ew, eh, totalFrames, clips);
       const filename = `frame_${String(f).padStart(4, '0')}.svg`;
       await api.writeFile(await api.pathJoin(exportDir, filename), svg);
 

@@ -1,4 +1,4 @@
-import type { AnimationLayer, Keyframe, BackgroundSettings } from '../store/projectStore';
+import type { AnimationLayer, Keyframe, BackgroundSettings, MovieClip } from '../store/projectStore';
 import { interpolateSvg, extractSvgInnerContent } from './interpolation';
 import { getEasingFn } from './easing';
 
@@ -100,6 +100,88 @@ export function renderLayer(layer: AnimationLayer, frame: number, totalFrames?: 
   return interpolateSvg(before.svgContent, after.svgContent, t);
 }
 
+// ── Clip Rendering ────────────────────────────────────────
+
+/**
+ * Find where a clip reference first appears in a continuous run of keyframes
+ * ending at or containing the current frame. Used to compute clip loop start.
+ */
+function findClipLoopStart(keyframes: Keyframe[], currentFrame: number, clipId: string): number {
+  // Find nearest keyframe at or before currentFrame
+  let idx = -1;
+  for (let i = 0; i < keyframes.length; i++) {
+    if (keyframes[i].frame <= currentFrame) idx = i;
+    else break;
+  }
+  if (idx < 0) return 0;
+
+  // Walk backwards: find where the continuous run of "has clip" starts
+  for (let i = idx; i >= 0; i--) {
+    const hasClip = keyframes[i].svgContent.includes(`data-flick-clip="${clipId}"`);
+    if (!hasClip) return keyframes[Math.min(i + 1, idx)].frame;
+    if (i === 0) return keyframes[0].frame;
+  }
+  return keyframes[0].frame;
+}
+
+/**
+ * Resolve <image data-flick-clip="..."> placeholders in SVG content
+ * by recursively compositing the referenced clips.
+ */
+function resolveClipReferences(
+  svgInner: string,
+  clips: MovieClip[],
+  layer: AnimationLayer,
+  frame: number,
+  totalFrames: number,
+  width: number,
+  height: number,
+  mode: CompositeMode,
+  visitedClips?: Set<string>,
+): string {
+  const visited = visitedClips || new Set<string>();
+
+  // Match <image ... data-flick-clip="clipId" ... /> or <image ... data-flick-clip="clipId" ...></image>
+  return svgInner.replace(
+    /<image\s[^>]*data-flick-clip="([^"]+)"[^>]*(?:\/>|><\/image>)/g,
+    (match, clipId) => {
+      // Cycle detection
+      if (visited.has(clipId)) return match;
+
+      const clip = clips.find((c) => c.id === clipId);
+      if (!clip) return match;
+
+      // Extract position/size from the image element
+      const xMatch = match.match(/\bx="([^"]+)"/);
+      const yMatch = match.match(/\by="([^"]+)"/);
+      const wMatch = match.match(/\bwidth="([^"]+)"/);
+      const hMatch = match.match(/\bheight="([^"]+)"/);
+
+      const ix = xMatch ? parseFloat(xMatch[1]) : 0;
+      const iy = yMatch ? parseFloat(yMatch[1]) : 0;
+      const iw = wMatch ? parseFloat(wMatch[1]) : clip.width;
+      const ih = hMatch ? parseFloat(hMatch[1]) : clip.height;
+
+      // Compute clip frame with looping
+      const loopStart = findClipLoopStart(layer.keyframes, frame, clipId);
+      const clipFrame = clip.totalFrames > 0
+        ? ((frame - loopStart) % clip.totalFrames + clip.totalFrames) % clip.totalFrames
+        : 0;
+
+      // Recursively composite the clip
+      const newVisited = new Set(visited);
+      newVisited.add(clipId);
+      const clipContent = compositeFrame(
+        clip.layers, clipFrame, clip.width, clip.height, mode,
+        clip.totalFrames, clips, newVisited,
+      );
+
+      // Replace the <image> with an inline <svg> containing the composited clip
+      return `<svg x="${ix}" y="${iy}" width="${iw}" height="${ih}" viewBox="0 0 ${clip.width} ${clip.height}">${clipContent}</svg>`;
+    }
+  );
+}
+
 /**
  * Composite all visible layers at a given frame into a single SVG inner content string.
  * Layers are rendered bottom-up (last in array = bottom of stack).
@@ -111,6 +193,8 @@ export function compositeFrame(
   _height: number,
   mode: CompositeMode = 'viewport',
   totalFrames?: number,
+  clips?: MovieClip[],
+  visitedClips?: Set<string>,
 ): string {
   let defs = '';
   let combined = '';
@@ -123,8 +207,13 @@ export function compositeFrame(
     const layer = layers[i];
     if (!isVisible(layer) || layer.keyframes.length === 0) continue;
 
-    const inner = renderLayer(layer, frame, totalFrames);
+    let inner = renderLayer(layer, frame, totalFrames);
     if (!inner) continue;
+
+    // Resolve clip references in this layer's content
+    if (clips && clips.length > 0) {
+      inner = resolveClipReferences(inner, clips, layer, frame, totalFrames || 0, _width, _height, mode, visitedClips);
+    }
 
     // Build clip-path / mask defs if referenced
     let attrs = '';
@@ -171,10 +260,11 @@ export function exportFrame(
   exportWidth?: number,
   exportHeight?: number,
   totalFrames?: number,
+  clips?: MovieClip[],
 ): string {
   const w = exportWidth || width;
   const h = exportHeight || height;
-  const inner = compositeFrame(layers, frame, width, height, 'render', totalFrames);
+  const inner = compositeFrame(layers, frame, width, height, 'render', totalFrames, clips);
 
   let bgContent = '';
   if (background) {

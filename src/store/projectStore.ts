@@ -1,5 +1,12 @@
 import { create } from 'zustand';
 import { compositeFrame, renderLayer } from '../lib/compositor';
+import type { ClipData, ClipMeta } from '../types/electron-api';
+
+// ── Clip Mode Detection ───────────────────────────────────
+
+const _clipId = new URLSearchParams(window.location.search).get('clipId');
+export const isClipMode = !!_clipId;
+export const editingClipId = _clipId;
 
 // ── Data Model ────────────────────────────────────────────
 
@@ -39,6 +46,11 @@ export interface MovieClip {
   height: number;
   totalFrames: number;
   layers: AnimationLayer[];
+}
+
+export interface UndoSnapshot {
+  layers: AnimationLayer[];
+  clips: MovieClip[];
 }
 
 export interface EditingState {
@@ -112,8 +124,8 @@ export interface ProjectState extends MovieClip {
   editingKeyframe: EditingState | null;
 
   // Undo/redo
-  undoStack: AnimationLayer[][];
-  redoStack: AnimationLayer[][];
+  undoStack: UndoSnapshot[];
+  redoStack: UndoSnapshot[];
   canUndo: boolean;
   canRedo: boolean;
 
@@ -188,6 +200,9 @@ export interface ProjectState extends MovieClip {
 
   handleNClip: (elementId: string) => void;
   syncClipsToInkscape: () => void;
+  renameClip: (id: string, name: string) => void;
+  deleteClip: (id: string) => void;
+  openClipEditor: (clipId: string) => void;
 
   // ── Compositor ────────────────────────────────────────
 
@@ -389,10 +404,11 @@ function computeGroupBBox(fullSvgContent: string, groupId: string):
 
 export const useProjectStore = create<ProjectState>((set, get) => {
 
-  /** Snapshot current layers onto the undo stack, clear redo */
+  /** Snapshot current layers + clips onto the undo stack, clear redo */
   function pushUndo() {
-    const { layers, undoStack } = get();
-    const newStack = [...undoStack, layers].slice(-MAX_UNDO);
+    if (isClipMode) return; // undo is managed by the main window
+    const { layers, clips, undoStack } = get();
+    const newStack = [...undoStack, { layers, clips }].slice(-MAX_UNDO);
     set({ undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true });
   }
 
@@ -458,32 +474,43 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   // ── Undo / Redo ─────────────────────────────────────────
 
   undo: () => {
-    const { undoStack, layers, editingKeyframe } = get();
+    if (isClipMode) {
+      window.api.requestClipUndo(editingClipId!);
+      return;
+    }
+    const { undoStack, layers, clips, editingKeyframe } = get();
     if (undoStack.length === 0) return;
     const prev = undoStack[undoStack.length - 1];
     const newUndoStack = undoStack.slice(0, -1);
     set((s) => ({
-      layers: prev,
+      layers: prev.layers,
+      clips: prev.clips,
       undoStack: newUndoStack,
-      redoStack: [...s.redoStack, layers],
+      redoStack: [...s.redoStack, { layers, clips }],
       canUndo: newUndoStack.length > 0,
       canRedo: true,
       dirty: true,
     }));
     get().recomposite();
     if (editingKeyframe) {
+      get().syncClipsToInkscape();
       get().reloadInkscapeDocument();
     }
   },
 
   redo: () => {
-    const { redoStack, layers, editingKeyframe } = get();
+    if (isClipMode) {
+      window.api.requestClipRedo(editingClipId!);
+      return;
+    }
+    const { redoStack, layers, clips, editingKeyframe } = get();
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     const newRedoStack = redoStack.slice(0, -1);
     set((s) => ({
-      layers: next,
-      undoStack: [...s.undoStack, layers],
+      layers: next.layers,
+      clips: next.clips,
+      undoStack: [...s.undoStack, { layers, clips }],
       redoStack: newRedoStack,
       canUndo: true,
       canRedo: newRedoStack.length > 0,
@@ -491,6 +518,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     }));
     get().recomposite();
     if (editingKeyframe) {
+      get().syncClipsToInkscape();
       get().reloadInkscapeDocument();
     }
   },
@@ -563,6 +591,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   },
 
   saveProject: async () => {
+    if (isClipMode) {
+      window.api.requestClipSave();
+      return;
+    }
     let { projectPath } = get();
     if (!projectPath) {
       const result = await window.api.showSaveDialog({
@@ -575,9 +607,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     }
     await window.api.writeFile(projectPath, buildFlickXml(get()));
     set({ dirty: false });
-    if (get().editingKeyframe) {
-      window.api.inkscapeUndirty();
-    }
+    window.api.inkscapeUndirty();
   },
 
   // ── Layer actions ───────────────────────────────────────
@@ -858,7 +888,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   },
 
   pasteAtSelection: () => {
-    const { selection, clipboard, layers, totalFrames } = get();
+    const { selection, clipboard, totalFrames } = get();
     if (!selection || !clipboard) return;
 
     const rect = selectionRect(selection);
@@ -1282,9 +1312,9 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     // Extract group children
     const groupChildren = serializeChildren(groupEl);
 
-    // Build clip SVG
+    // Build clip SVG — normalize coordinates to origin (0,0)
     const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
-    const clipSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="${bbox.x} ${bbox.y} ${bbox.width} ${bbox.height}">\n${defsBlock}${groupChildren.trim()}\n</svg>`;
+    const clipSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="0 0 ${bbox.width} ${bbox.height}">\n${defsBlock}<g id="g1" transform="translate(${-bbox.x}, ${-bbox.y})">${groupChildren.trim()}</g>\n</svg>`;
 
     // Create MovieClip
     const newClip: MovieClip = {
@@ -1352,6 +1382,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     const { clips } = get();
     const api = window.api;
     for (const clip of clips) {
+      // In clip mode, exclude the currently-editing clip to prevent circular refs
+      if (isClipMode && clip.id === editingClipId) continue;
       const firstLayer = clip.layers[0];
       if (!firstLayer) continue;
       const firstKf = firstLayer.keyframes[0];
@@ -1362,11 +1394,74 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     }
   },
 
+  renameClip: (id: string, name: string) => {
+    const clip = get().clips.find((c) => c.id === id);
+    if (!clip || clip.name === name) return;
+    pushUndo();
+    set((s) => ({
+      clips: s.clips.map((c) => c.id === id ? { ...c, name } : c),
+    }));
+    // Re-register with Inkscape under new name
+    const updated = get().clips.find((c) => c.id === id);
+    if (updated) {
+      const firstKf = updated.layers[0]?.keyframes[0];
+      if (firstKf) {
+        const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
+        const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${updated.width}" height="${updated.height}" viewBox="0 0 ${updated.width} ${updated.height}">\n<image data-flick-clip="${id}" href="data:image/svg+xml;base64,${b64}" width="${updated.width}" height="${updated.height}" />\n</svg>`;
+        window.api.inkscapeClip(id, name, imageSvg);
+      }
+    }
+    if (get().editingKeyframe) window.api.inkscapeDirty();
+  },
+
+  deleteClip: (id: string) => {
+    if (!get().clips.some((c) => c.id === id)) return;
+    pushUndo();
+
+    // Remove <image data-flick-clip="id"> from all keyframe SVGs
+    const parser = new DOMParser();
+    const serializer = new XMLSerializer();
+    function scrubClipRefs(svgContent: string): string {
+      const doc = parser.parseFromString(svgContent, 'image/svg+xml');
+      if (doc.querySelector('parsererror')) return svgContent;
+      const images = Array.from(doc.querySelectorAll(`image[data-flick-clip="${id}"]`));
+      if (images.length === 0) return svgContent;
+      for (const img of images) img.parentNode?.removeChild(img);
+      return serializer.serializeToString(doc.documentElement);
+    }
+
+    set((s) => ({
+      clips: s.clips.filter((c) => c.id !== id),
+      layers: s.layers.map((l) => ({
+        ...l,
+        keyframes: l.keyframes.map((kf) => ({
+          ...kf,
+          svgContent: scrubClipRefs(kf.svgContent),
+        })),
+      })),
+    }));
+    window.api.inkscapeUclip(id);
+    if (get().editingKeyframe) {
+      window.api.inkscapeDirty();
+      get().reloadInkscapeDocument();
+    }
+    get().recomposite();
+  },
+
+  openClipEditor: (clipId: string) => {
+    const state = get();
+    const clip = state.clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const folderName = state.projectPath ? state.projectPath.split(/[\\/]/).pop() : 'Untitled';
+    const title = `${folderName} — [${clip.name}] — Flick`;
+    window.api.openClipEditor(clipId, title);
+  },
+
   // ── Compositor ──────────────────────────────────────────
 
   recomposite: () => {
-    const { layers, currentFrame, width, height, totalFrames } = get();
-    const combined = compositeFrame(layers, currentFrame, width, height, 'viewport', totalFrames);
+    const { layers, currentFrame, width, height, totalFrames, clips } = get();
+    const combined = compositeFrame(layers, currentFrame, width, height, 'viewport', totalFrames, clips);
     set({ compositedSvg: combined });
   },
 };

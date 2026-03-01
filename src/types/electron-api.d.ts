@@ -1,3 +1,19 @@
+export interface ClipData {
+  layers: import('../store/projectStore').AnimationLayer[];
+  width: number;
+  height: number;
+  totalFrames: number;
+  name: string;
+}
+
+export interface ClipMeta {
+  canUndo: boolean;
+  canRedo: boolean;
+  dirty: boolean;
+  fps: number;
+  projectPath: string | null;
+}
+
 export interface ElectronAPI {
   // File I/O
   readFile(filePath: string): Promise<string>;
@@ -44,6 +60,35 @@ export interface ElectronAPI {
   inkscapeUndirty(): Promise<void>;
   onInkscapeRequestSave(callback: () => void): () => void;
 
+  // ── Clip Editor IPC ──────────────────────────────────────
+
+  openClipEditor(clipId: string, title: string): Promise<void>;
+
+  // Clip window → Main
+  syncClipState(clipId: string, clipData: ClipData): void;
+  requestClipUndo(clipId: string): void;
+  requestClipRedo(clipId: string): void;
+  requestClipSave(): void;
+  requestClipState(clipId: string): Promise<void>;
+
+  // Clip window: listen for state updates
+  onClipStateUpdate(callback: (clipData: ClipData, meta: ClipMeta) => void): () => void;
+
+  // Main window → Clip
+  broadcastClipState(clipId: string, clipData: ClipData, meta: ClipMeta): void;
+
+  // Main window: listeners
+  onClipIncomingSync(callback: (clipId: string, clipData: ClipData) => void): () => void;
+  onClipUndoRequest(callback: (clipId: string) => void): () => void;
+  onClipRedoRequest(callback: (clipId: string) => void): () => void;
+  onClipSaveRequest(callback: () => void): () => void;
+  onClipStateRequest(callback: (clipId: string) => void): () => void;
+
+  // Main window → All clip windows: broadcast meta
+  broadcastClipMetaToAll(meta: ClipMeta): void;
+
+  // Clip window: listen for meta-only updates
+  onClipMetaUpdate(callback: (meta: ClipMeta) => void): () => void;
 }
 
 declare global {

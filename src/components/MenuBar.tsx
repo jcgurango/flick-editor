@@ -15,7 +15,7 @@ interface MenuDef {
   items: MenuItemDef[];
 }
 
-export function MenuBar() {
+export function MenuBar({ isClipMode }: { isClipMode: boolean }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showExport, setShowExport] = useState(false);
   const menuBarRef = useRef<HTMLDivElement>(null);
@@ -56,10 +56,11 @@ export function MenuBar() {
     await saveProject();
   };
 
-  const menus: MenuDef[] = [
-    {
-      label: 'File',
-      items: [
+  const fileItems: MenuItemDef[] = isClipMode
+    ? [
+        { label: 'Save', action: handleSave, shortcut: 'Ctrl+S' },
+      ]
+    : [
         {
           label: 'New Project',
           action: () => {
@@ -79,7 +80,12 @@ export function MenuBar() {
           },
           disabled: !projectPath,
         },
-      ],
+      ];
+
+  const menus: MenuDef[] = [
+    {
+      label: 'File',
+      items: fileItems,
     },
     {
       label: 'Edit',

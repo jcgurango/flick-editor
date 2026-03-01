@@ -23,6 +23,17 @@ function writeConfig(config) {
 
 let mainWindow = null;
 
+// ── Multi-Inkscape window tracking ────────────────────────
+
+let inkscapeWindowForRenderer = new Map(); // webContents.id → inkscapeWindowId
+let rendererForInkscapeWindow = new Map(); // inkscapeWindowId → webContents.id
+let pendingOpens = [];                     // queue of { rendererId, resolve }
+let allRendererWindows = new Map();        // webContents.id → BrowserWindow
+
+// ── Clip editor windows ───────────────────────────────────
+
+let clipEditorWindows = new Map(); // clipId → BrowserWindow
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -34,13 +45,24 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false, // allow file:// refs in SVG images
+      webSecurity: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
-  // Remove default menu bar — we use our own in-app menus
   Menu.setApplicationMenu(null);
+  const mainRendererId = mainWindow.webContents.id;
+  allRendererWindows.set(mainRendererId, mainWindow);
+
+  mainWindow.on('closed', () => {
+    // Close all clip editor windows
+    for (const [, win] of clipEditorWindows) {
+      if (!win.isDestroyed()) win.close();
+    }
+    clipEditorWindows.clear();
+    allRendererWindows.delete(mainRendererId);
+    mainWindow = null;
+  });
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -64,8 +86,6 @@ ipcMain.handle('fs:mkdir', async (_event, dirPath) => {
   await fs.promises.mkdir(dirPath, { recursive: true });
 });
 
-
-
 ipcMain.handle('fs:exists', async (_event, filePath) => {
   try {
     await fs.promises.access(filePath);
@@ -88,11 +108,13 @@ ipcMain.handle('path:dirname', (_event, filePath) => {
 // ── Dialogs ───────────────────────────────────────────────
 
 ipcMain.handle('dialog:open', async (_event, options) => {
-  return dialog.showOpenDialog(mainWindow, options);
+  const senderWin = BrowserWindow.fromWebContents(_event.sender);
+  return dialog.showOpenDialog(senderWin || mainWindow, options);
 });
 
 ipcMain.handle('dialog:save', async (_event, options) => {
-  return dialog.showSaveDialog(mainWindow, options);
+  const senderWin = BrowserWindow.fromWebContents(_event.sender);
+  return dialog.showSaveDialog(senderWin || mainWindow, options);
 });
 
 // ── Config ────────────────────────────────────────────────
@@ -111,12 +133,17 @@ ipcMain.handle('config:set', async (_event, key, value) => {
 // ── Inkscape Pipe Mode ────────────────────────────────────
 
 let inkscapeProc = null;
-let inkscapeWindowId = null;
-let pendingOpenResolve = null;
+
+/** Find the BrowserWindow for a given webContents.id */
+function findWindowForRenderer(rendererId) {
+  const win = allRendererWindows.get(rendererId);
+  if (win && !win.isDestroyed()) return win;
+  return null;
+}
 
 function parseInkscapeStdout(stream) {
   let buffer = '';
-  let expecting = null; // { windowId, contentLength, filename }
+  let expecting = null;
 
   stream.on('data', (chunk) => {
     process.stdout.write(`[ink stdout] ${chunk}`);
@@ -134,23 +161,27 @@ function parseInkscapeStdout(stream) {
         const openMatch = line.match(/^OPEN (\d+)$/);
         if (openMatch) {
           const id = parseInt(openMatch[1]);
-          inkscapeWindowId = id;
-          if (pendingOpenResolve) {
-            pendingOpenResolve(id);
-            pendingOpenResolve = null;
+          if (pendingOpens.length > 0) {
+            const pending = pendingOpens.shift();
+            inkscapeWindowForRenderer.set(pending.rendererId, id);
+            rendererForInkscapeWindow.set(id, pending.rendererId);
+            pending.resolve(id);
           }
           continue;
         }
 
-        // CLOSE <id>  (user closed the window)
+        // CLOSE <id>
         const closeMatch = line.match(/^CLOSE (\d+)$/);
         if (closeMatch) {
           const id = parseInt(closeMatch[1]);
-          if (inkscapeWindowId === id) {
-            inkscapeWindowId = null;
-          }
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('inkscape:windowClosed');
+          const rendererId = rendererForInkscapeWindow.get(id);
+          if (rendererId !== undefined) {
+            inkscapeWindowForRenderer.delete(rendererId);
+            rendererForInkscapeWindow.delete(id);
+            const win = findWindowForRenderer(rendererId);
+            if (win) {
+              win.webContents.send('inkscape:windowClosed');
+            }
           }
           continue;
         }
@@ -158,8 +189,11 @@ function parseInkscapeStdout(stream) {
         // REQUESTSAVE <id>
         const requestSaveMatch = line.match(/^REQUESTSAVE (\d+)$/);
         if (requestSaveMatch) {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('inkscape:requestSave');
+          const id = parseInt(requestSaveMatch[1]);
+          const rendererId = rendererForInkscapeWindow.get(id);
+          if (rendererId !== undefined) {
+            const win = findWindowForRenderer(rendererId);
+            if (win) win.webContents.send('inkscape:requestSave');
           }
           continue;
         }
@@ -167,15 +201,29 @@ function parseInkscapeStdout(stream) {
         // NCLIP <element-id>
         const nclipMatch = line.match(/^NCLIP (.+)$/);
         if (nclipMatch) {
-          mainWindow.webContents.send('inkscape:nclip', nclipMatch[1]);
+          // NCLIP doesn't include a window ID; route to the most recently
+          // active renderer that has an Inkscape window open.
+          // In practice, NCLIP follows a SAVE which sets `expecting`, so we
+          // can't easily know which window triggered it. Forward to all
+          // renderers that have an Inkscape window.
+          // Actually, NCLIP always follows the last SAVE. We track that.
+          if (lastSaveRendererId !== undefined) {
+            const win = findWindowForRenderer(lastSaveRendererId);
+            if (win) win.webContents.send('inkscape:nclip', nclipMatch[1]);
+          } else if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inkscape:nclip', nclipMatch[1]);
+          }
           continue;
         }
 
         // UNDO <id>
         const undoMatch = line.match(/^UNDO (\d+)$/);
         if (undoMatch) {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('inkscape:undo');
+          const id = parseInt(undoMatch[1]);
+          const rendererId = rendererForInkscapeWindow.get(id);
+          if (rendererId !== undefined) {
+            const win = findWindowForRenderer(rendererId);
+            if (win) win.webContents.send('inkscape:undo');
           }
           continue;
         }
@@ -183,8 +231,11 @@ function parseInkscapeStdout(stream) {
         // REDO <id>
         const redoMatch = line.match(/^REDO (\d+)$/);
         if (redoMatch) {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('inkscape:redo');
+          const id = parseInt(redoMatch[1]);
+          const rendererId = rendererForInkscapeWindow.get(id);
+          if (rendererId !== undefined) {
+            const win = findWindowForRenderer(rendererId);
+            if (win) win.webContents.send('inkscape:redo');
           }
           continue;
         }
@@ -219,13 +270,21 @@ function parseInkscapeStdout(stream) {
       const content = buf.subarray(0, expecting.contentLength).toString('utf-8');
       buffer = buf.subarray(expecting.contentLength).toString('utf-8');
 
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('inkscape:saved', expecting.filename, content);
+      const rendererId = rendererForInkscapeWindow.get(expecting.windowId);
+      lastSaveRendererId = rendererId;
+      if (rendererId !== undefined) {
+        const win = findWindowForRenderer(rendererId);
+        if (win) {
+          win.webContents.send('inkscape:saved', expecting.filename, content);
+        }
       }
       expecting = null;
     }
   });
 }
+
+// Track which renderer received the last SAVE (for NCLIP routing)
+let lastSaveRendererId = undefined;
 
 function ensureInkscape() {
   return new Promise((resolve, reject) => {
@@ -245,12 +304,12 @@ function ensureInkscape() {
     });
 
     inkscapeProc = proc;
-    inkscapeWindowId = null;
+    inkscapeWindowForRenderer.clear();
+    rendererForInkscapeWindow.clear();
     let started = false;
 
     proc.on('error', (err) => {
       inkscapeProc = null;
-      inkscapeWindowId = null;
       if (!started) {
         started = true;
         reject(err);
@@ -266,17 +325,20 @@ function ensureInkscape() {
 
     proc.on('exit', () => {
       inkscapeProc = null;
-      inkscapeWindowId = null;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('inkscape:windowClosed');
+      // Notify all renderers that had Inkscape windows
+      for (const [rendererId] of inkscapeWindowForRenderer) {
+        const win = findWindowForRenderer(rendererId);
+        if (win) win.webContents.send('inkscape:windowClosed');
       }
+      inkscapeWindowForRenderer.clear();
+      rendererForInkscapeWindow.clear();
     });
   });
 }
 
-function openInkscapeWindow() {
+function openInkscapeWindow(rendererId) {
   return new Promise((resolve) => {
-    pendingOpenResolve = resolve;
+    pendingOpens.push({ rendererId, resolve });
     console.log('[ink stdin] OPEN');
     inkscapeProc.stdin.write('OPEN\n');
   });
@@ -286,37 +348,149 @@ function openInkscapeWindow() {
 ipcMain.handle('inkscape:load', async (_event, filename, svgData) => {
   await ensureInkscape();
 
-  if (!inkscapeWindowId) {
-    await openInkscapeWindow();
+  const rendererId = _event.sender.id;
+
+  if (!inkscapeWindowForRenderer.has(rendererId)) {
+    await openInkscapeWindow(rendererId);
   }
 
+  const inkId = inkscapeWindowForRenderer.get(rendererId);
   const buf = Buffer.from(svgData, 'utf-8');
-  const header = `LOAD ${inkscapeWindowId} content-length:${buf.length}\n${filename}\n`;
-  console.log(`[ink stdin] LOAD ${inkscapeWindowId} content-length:${buf.length} filename:${filename}`);
+  const header = `LOAD ${inkId} content-length:${buf.length}\n${filename}\n`;
+  console.log(`[ink stdin] LOAD ${inkId} content-length:${buf.length} filename:${filename}`);
   console.log(`[ink stdin] ${svgData}`);
   inkscapeProc.stdin.write(header);
   inkscapeProc.stdin.write(buf);
 });
 
 ipcMain.handle('inkscape:clip', async (_event, clipId, clipName, svgData) => {
+  if (!inkscapeProc || inkscapeProc.killed) return;
   const svgBuf = Buffer.from(svgData, 'utf-8');
   inkscapeProc.stdin.write(`CLIP ${clipId} content-length:${svgBuf.length}\n${clipName}\n`);
   inkscapeProc.stdin.write(svgBuf);
 });
 
 ipcMain.handle('inkscape:uclip', async (_event, clipId) => {
+  if (!inkscapeProc || inkscapeProc.killed) return;
   inkscapeProc.stdin.write(`UCLIP ${clipId}\n`);
 });
 
 ipcMain.handle('inkscape:dirty', async () => {
-  if (inkscapeProc && inkscapeWindowId) {
-    inkscapeProc.stdin.write(`DIRTY ${inkscapeWindowId}\n`);
+  if (!inkscapeProc || inkscapeProc.killed) return;
+  for (const inkId of rendererForInkscapeWindow.keys()) {
+    inkscapeProc.stdin.write(`DIRTY ${inkId}\n`);
   }
 });
 
 ipcMain.handle('inkscape:undirty', async () => {
-  if (inkscapeProc && inkscapeWindowId) {
-    inkscapeProc.stdin.write(`UNDIRTY ${inkscapeWindowId}\n`);
+  if (!inkscapeProc || inkscapeProc.killed) return;
+  for (const inkId of rendererForInkscapeWindow.keys()) {
+    inkscapeProc.stdin.write(`UNDIRTY ${inkId}\n`);
+  }
+});
+
+// ── Clip Editor Window Management ─────────────────────────
+
+ipcMain.handle('clip:openEditor', (_event, clipId, title) => {
+  if (clipEditorWindows.has(clipId)) {
+    const existing = clipEditorWindows.get(clipId);
+    if (!existing.isDestroyed()) {
+      existing.focus();
+      return;
+    }
+    clipEditorWindows.delete(clipId);
+  }
+
+  let url;
+  if (isDev) {
+    url = `http://localhost:5173?clipId=${clipId}`;
+  } else {
+    url = `file://${path.join(__dirname, '..', 'dist', 'index.html').replace(/\\/g, '/')}?clipId=${clipId}`;
+  }
+
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    title: title || `Clip Editor — ${clipId}`,
+    icon: path.join(__dirname, '..', 'public', 'FlickIcon.svg'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  Menu.setApplicationMenu(null);
+  win.loadURL(url);
+  const clipRendererId = win.webContents.id;
+  clipEditorWindows.set(clipId, win);
+  allRendererWindows.set(clipRendererId, win);
+
+  win.on('closed', () => {
+    clipEditorWindows.delete(clipId);
+    allRendererWindows.delete(clipRendererId);
+    // Clean up Inkscape window mapping
+    const inkId = inkscapeWindowForRenderer.get(clipRendererId);
+    if (inkId !== undefined) {
+      inkscapeWindowForRenderer.delete(clipRendererId);
+      rendererForInkscapeWindow.delete(inkId);
+    }
+  });
+});
+
+// ── Inter-Window IPC (Clip ↔ Main) ────────────────────────
+
+// Clip window → Main: sync clip state
+ipcMain.on('clip:syncState', (_event, clipId, clipData) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:incomingSync', clipId, clipData);
+  }
+});
+
+// Clip window → Main: request undo
+ipcMain.on('clip:requestUndo', (_event, clipId) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:undoRequest', clipId);
+  }
+});
+
+// Clip window → Main: request redo
+ipcMain.on('clip:requestRedo', (_event, clipId) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:redoRequest', clipId);
+  }
+});
+
+// Clip window → Main: request save
+ipcMain.on('clip:requestSave', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:saveRequest');
+  }
+});
+
+// Clip window requests initial state from main
+ipcMain.handle('clip:requestState', (_event, clipId) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:stateRequest', clipId, _event.sender.id);
+  }
+  // The actual response is sent asynchronously via clip:broadcastState
+});
+
+// Main window → Clip: broadcast updated clip state
+ipcMain.on('clip:broadcastState', (_event, clipId, clipData, meta) => {
+  const win = clipEditorWindows.get(clipId);
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('clip:stateUpdate', clipData, meta);
+  }
+});
+
+// Main window → All clip windows: broadcast meta-only update (dirty, fps, etc.)
+ipcMain.on('clip:broadcastMetaToAll', (_event, meta) => {
+  for (const [, win] of clipEditorWindows) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('clip:metaUpdate', meta);
+    }
   }
 });
 
@@ -330,8 +504,9 @@ app.on('window-all-closed', () => {
     inkscapeProc.stdin.end();
     inkscapeProc.kill();
     inkscapeProc = null;
-    inkscapeWindowId = null;
   }
+  inkscapeWindowForRenderer.clear();
+  rendererForInkscapeWindow.clear();
 
   if (process.platform !== 'darwin') app.quit();
 });
