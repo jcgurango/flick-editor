@@ -1,4 +1,4 @@
-import { interpolate } from 'd3-interpolate';
+import { interpolate, interpolateTransformSvg } from 'd3-interpolate';
 
 /** Inject missing namespace declarations so DOMParser's strict XML mode doesn't choke */
 const NS_DECLS: [string, string][] = [
@@ -33,8 +33,23 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   const parser = new DOMParser();
   const serializer = new XMLSerializer();
 
-  const docA = parser.parseFromString(ensureNamespaces(svgA), 'image/svg+xml');
-  const docB = parser.parseFromString(ensureNamespaces(svgB), 'image/svg+xml');
+  const patchedA = ensureNamespaces(svgA);
+  const patchedB = ensureNamespaces(svgB);
+  const docA = parser.parseFromString(patchedA, 'image/svg+xml');
+  const docB = parser.parseFromString(patchedB, 'image/svg+xml');
+
+  const errA = docA.querySelector('parsererror');
+  const errB = docB.querySelector('parsererror');
+  if (errA || errB) {
+    console.error('[interpolateSvg] XML parse error', {
+      errorInA: errA?.textContent,
+      errorInB: errB?.textContent,
+      svgASnippet: patchedA.slice(0, 500),
+      svgBSnippet: patchedB.slice(0, 500),
+      svgALength: patchedA.length,
+      svgBLength: patchedB.length,
+    });
+  }
 
   const rootA = docA.documentElement;
   const rootB = docB.documentElement;
@@ -71,6 +86,19 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   for (const child of Array.from(output.childNodes)) {
     result += serializer.serializeToString(child);
   }
+
+  // Debug: validate output is parseable XML
+  const checkDoc = parser.parseFromString(
+    `<svg xmlns="http://www.w3.org/2000/svg">${result}</svg>`,
+    'image/svg+xml',
+  );
+  if (checkDoc.querySelector('parsererror')) {
+    console.error('[interpolateSvg] output is invalid XML', {
+      outputSnippet: result.slice(0, 500),
+      outputLength: result.length,
+    });
+  }
+
   return result;
 }
 
@@ -125,28 +153,23 @@ function processNode(
       for (const attr of Array.from(elemB.attributes)) attrNames.add(attr.name);
 
       for (const name of attrNames) {
-        const valA = elemA.getAttribute(name);
-        const valB = elemB.getAttribute(name);
+        const valA = elemA.getAttribute(name) || "";
+        const valB = elemB.getAttribute(name) || "";
 
-        if (valA !== null && valB !== null) {
-          // Both have the attribute — interpolate
-          if (valA === valB) {
-            interpolated.setAttribute(name, valA);
-          } else {
-            try {
-              const interp = interpolate(valA, valB);
-              interpolated.setAttribute(name, interp(t));
-            } catch {
-              // If interpolation fails, snap
-              interpolated.setAttribute(name, t < 0.5 ? valA : valB);
-            }
+        if (valA !== valB) {
+          try {
+            const interp =
+              name === 'transform'
+                ? interpolateTransformSvg(valA, valB)
+                : interpolate(valA, valB);
+
+            interpolated.setAttribute(name, interp(t));
+          } catch {
+            // If interpolation fails, snap
+            interpolated.setAttribute(name, t < 0.5 ? valA : valB);
           }
-        } else if (valA !== null) {
-          // Only in A
+        } else {
           interpolated.setAttribute(name, valA);
-        } else if (valB !== null) {
-          // Only in B — fade in
-          interpolated.setAttribute(name, valB);
         }
       }
 

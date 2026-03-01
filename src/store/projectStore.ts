@@ -267,7 +267,7 @@ function injectClipHrefsInLayers(layers: AnimationLayer[], clips: MovieClip[]): 
             if (/\bhref="/.test(before)) return match;
             const href = clipHrefs.get(clipId);
             if (!href) return match;
-            return `<image ${before} href="${href}"/>`;
+            return `<image ${before.replace(/\/\s*$/, '')} href="${href}"/>`;
           },
         ),
       };
