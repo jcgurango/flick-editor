@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { compositeFrame, renderLayer } from '../lib/compositor';
-import type { ClipData, ClipMeta } from '../types/electron-api';
 
 // ── Clip Mode Detection ───────────────────────────────────
 
@@ -264,7 +263,7 @@ function injectClipHrefsInLayers(layers: AnimationLayer[], clips: MovieClip[]): 
         ...kf,
         svgContent: kf.svgContent.replace(
           /<image\s([^>]*data-flick-clip="([^"]+)"[^>]*)(\/?>(?:<\/image>)?)/g,
-          (match, before, clipId, close) => {
+          (match, before, clipId) => {
             if (/\bhref="/.test(before)) return match;
             const href = clipHrefs.get(clipId);
             if (!href) return match;
