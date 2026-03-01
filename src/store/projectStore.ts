@@ -202,6 +202,7 @@ export interface ProjectState extends MovieClip {
   handleNClip: (elementId: string) => void;
   syncClipsToInkscape: () => void;
   renameClip: (id: string, name: string) => void;
+  duplicateClip: (id: string) => void;
   deleteClip: (id: string) => void;
   openClipEditor: (clipId: string) => void;
 
@@ -1498,6 +1499,38 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
         const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${updated.width}" height="${updated.height}" viewBox="0 0 ${updated.width} ${updated.height}">\n<image data-flick-clip="${id}" href="data:image/svg+xml;base64,${b64}" width="${updated.width}" height="${updated.height}" />\n</svg>`;
         window.api.inkscapeClip(id, name, imageSvg);
       }
+    }
+    if (get().editingKeyframe) window.api.inkscapeDirty();
+  },
+
+  duplicateClip: (id: string) => {
+    const clip = get().clips.find((c) => c.id === id);
+    if (!clip) return;
+    pushUndo();
+
+    let clipNum = 1;
+    while (get().clips.some((c) => c.id === `clip-${clipNum}`)) clipNum++;
+    const newId = `clip-${clipNum}`;
+    const newName = `${clip.name} Copy`;
+
+    const newClip: MovieClip = {
+      ...clip,
+      id: newId,
+      name: newName,
+      layers: clip.layers.map((l) => ({
+        ...l,
+        keyframes: l.keyframes.map((kf) => ({ ...kf })),
+      })),
+    };
+
+    set((s) => ({ clips: [...s.clips, newClip] }));
+
+    // Register with Inkscape
+    const firstKf = newClip.layers[0]?.keyframes[0];
+    if (firstKf) {
+      const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
+      const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${newClip.width}" height="${newClip.height}" viewBox="0 0 ${newClip.width} ${newClip.height}">\n<image data-flick-clip="${newId}" href="data:image/svg+xml;base64,${b64}" width="${newClip.width}" height="${newClip.height}" />\n</svg>`;
+      window.api.inkscapeClip(newId, newName, imageSvg);
     }
     if (get().editingKeyframe) window.api.inkscapeDirty();
   },

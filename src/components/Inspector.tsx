@@ -64,6 +64,7 @@ export function Inspector({ isClipMode }: { isClipMode: boolean }) {
 
   const clips = useProjectStore((s) => s.clips);
   const renameClip = useProjectStore((s) => s.renameClip);
+  const duplicateClip = useProjectStore((s) => s.duplicateClip);
   const deleteClip = useProjectStore((s) => s.deleteClip);
   const openClipEditor = useProjectStore((s) => s.openClipEditor);
 
@@ -209,6 +210,13 @@ export function Inspector({ isClipMode }: { isClipMode: boolean }) {
                     title="Edit clip"
                   >
                     e
+                  </button>
+                  <button
+                    className="clip-edit-btn"
+                    onClick={() => duplicateClip(clip.id)}
+                    title="Duplicate clip"
+                  >
+                    d
                   </button>
                   <button
                     className="clip-delete-btn"
