@@ -92,6 +92,7 @@ export function selectionRect(sel: TimelineSelection) {
 export interface ProjectState extends MovieClip {
   // Project metadata
   projectPath: string | null;
+  exportPath: string | null;
   dirty: boolean;
 
   // Project settings
@@ -183,6 +184,7 @@ export interface ProjectState extends MovieClip {
   setFps: (fps: number) => void;
   setTotalFrames: (totalFrames: number) => void;
   setBackground: (bg: Partial<BackgroundSettings>) => void;
+  setExportPath: (path: string | null) => void;
 
   // ── Undo/Redo ─────────────────────────────────────────
 
@@ -333,9 +335,10 @@ function buildFlickXml(state: {
   layers: AnimationLayer[];
   background: BackgroundSettings;
   clips: MovieClip[];
+  exportPath: string | null;
 }): string {
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-  xml += `<flick version="1" width="${state.width}" height="${state.height}" fps="${state.fps}" frames="${state.totalFrames}">\n`;
+  xml += `<flick version="1" width="${state.width}" height="${state.height}" fps="${state.fps}" frames="${state.totalFrames}"${state.exportPath ? ` export-path="${escXml(state.exportPath)}"` : ''}>\n`;
 
   if (state.background.type === 'image' && state.background.imageData) {
     xml += `  <background type="image"><image-data><![CDATA[${state.background.imageData}]]></image-data></background>\n`;
@@ -399,6 +402,7 @@ function parseFlickXml(xmlString: string): {
   background: BackgroundSettings;
   layers: AnimationLayer[];
   clips: MovieClip[];
+  exportPath: string | null;
 } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlString, 'application/xml');
@@ -408,6 +412,7 @@ function parseFlickXml(xmlString: string): {
   const height = Number(root.getAttribute('height'));
   const fps = Number(root.getAttribute('fps'));
   const totalFrames = Number(root.getAttribute('frames'));
+  const exportPath = root.getAttribute('export-path') || null;
 
   // Background
   const bgEl = root.querySelector('background');
@@ -442,7 +447,7 @@ function parseFlickXml(xmlString: string): {
   // Layers (direct children of root, not inside clips)
   const layers = parseLayersXml(root, serializer);
 
-  return { width, height, fps, totalFrames, background, layers, clips };
+  return { width, height, fps, totalFrames, background, layers, clips, exportPath };
 }
 
 /** Extract inner content from an SVG string (everything inside the root <svg> tag) */
@@ -497,6 +502,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   id: 'root',
   name: 'Untitled',
   projectPath: null,
+  exportPath: null,
   dirty: false,
 
   width: 1920,
@@ -599,6 +605,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       id: 'root',
       name: 'Untitled',
       projectPath: null,
+      exportPath: null,
       dirty: false,
       width: 1920,
       height: 1080,
@@ -642,6 +649,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     set({
       projectPath: filePath,
+      exportPath: parsed.exportPath,
       dirty: false,
       width: parsed.width,
       height: parsed.height,
@@ -1306,6 +1314,11 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   setFps: (fps: number) => set({ fps, dirty: true }),
   setTotalFrames: (totalFrames: number) => set({ totalFrames, dirty: true }),
   setBackground: (bg: Partial<BackgroundSettings>) => set((s) => ({ background: { ...s.background, ...bg }, dirty: true })),
+  setExportPath: (path: string | null) => {
+    if (path === get().exportPath) return;
+    pushUndo();
+    set({ exportPath: path, dirty: true });
+  },
 
   // ── Playback ────────────────────────────────────────────
 

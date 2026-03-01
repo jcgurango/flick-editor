@@ -12,7 +12,8 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const height = useProjectStore((s) => s.height);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const background = useProjectStore((s) => s.background);
-  const projectPath = useProjectStore((s) => s.projectPath);
+  const exportPath = useProjectStore((s) => s.exportPath);
+  const setExportPath = useProjectStore((s) => s.setExportPath);
   const clips = useProjectStore((s) => s.clips);
 
   const [renderBg, setRenderBg] = useState(true);
@@ -40,15 +41,21 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
     });
   };
 
+  const handleBrowse = async () => {
+    const result = await window.api.showOpenDialog({
+      title: 'Choose export folder',
+      defaultPath: exportPath || undefined,
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return;
+    setExportPath(result.filePaths[0]);
+  };
+
   const handleExport = async () => {
-    if (!projectPath) return;
-    const api = window.api;
+    if (!exportPath) return;
 
     await saveSettings();
-
-    const dir = await api.dirname(projectPath);
-    const exportDir = await api.pathJoin(dir, 'export');
-    await api.mkdir(exportDir);
+    await window.api.mkdir(exportPath);
 
     setExporting(true);
     setProgress(0);
@@ -63,7 +70,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
 
       const svg = exportFrame(layers, f, width, height, bg, ew, eh, totalFrames, clips);
       const filename = `frame_${String(f).padStart(4, '0')}.svg`;
-      await api.writeFile(await api.pathJoin(exportDir, filename), svg);
+      await window.api.writeFile(await window.api.pathJoin(exportPath, filename), svg);
 
       setProgress(f + 1);
       // Yield to UI
@@ -89,6 +96,22 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-title">Export Frames</div>
         <div className="dialog-body">
+          <div className="dialog-field">
+            <label>Folder</label>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="text"
+                value={exportPath || ''}
+                readOnly
+                placeholder="No folder selected"
+                style={{ flex: 1 }}
+                disabled={exporting}
+              />
+              <button className="dialog-btn" onClick={handleBrowse} disabled={exporting}>
+                Browse
+              </button>
+            </div>
+          </div>
           <div className="dialog-field">
             <label>Background</label>
             <select
@@ -140,7 +163,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
             <button
               className="dialog-btn dialog-btn-primary"
               onClick={handleExport}
-              disabled={!projectPath}
+              disabled={!exportPath}
             >
               Export
             </button>
