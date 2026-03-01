@@ -237,6 +237,75 @@ function escXml(s: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
+/** Strip href from <image data-flick-clip> elements (redundant with clips section) */
+function stripClipHrefs(svgContent: string): string {
+  return svgContent.replace(
+    /<image\s[^>]*data-flick-clip="[^"]+?"[^>]*(?:\/>|><\/image>)/g,
+    (match) => match.replace(/\s*href="[^"]*"/, ''),
+  );
+}
+
+/** Inject href into <image data-flick-clip> elements that are missing it */
+function injectClipHrefsInLayers(layers: AnimationLayer[], clips: MovieClip[]): AnimationLayer[] {
+  if (clips.length === 0) return layers;
+  const clipHrefs = new Map<string, string>();
+  for (const clip of clips) {
+    const firstKf = clip.layers[0]?.keyframes[0];
+    if (firstKf) {
+      const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
+      clipHrefs.set(clip.id, `data:image/svg+xml;base64,${b64}`);
+    }
+  }
+  return layers.map((layer) => ({
+    ...layer,
+    keyframes: layer.keyframes.map((kf) => {
+      if (!kf.svgContent.includes('data-flick-clip=')) return kf;
+      return {
+        ...kf,
+        svgContent: kf.svgContent.replace(
+          /<image\s([^>]*data-flick-clip="([^"]+)"[^>]*)(\/?>(?:<\/image>)?)/g,
+          (match, before, clipId, close) => {
+            if (/\bhref="/.test(before)) return match;
+            const href = clipHrefs.get(clipId);
+            if (!href) return match;
+            return `<image ${before} href="${href}"/>`;
+          },
+        ),
+      };
+    }),
+  }));
+}
+
+/** Scale width/height of all instances of a clip in keyframe SVGs */
+export function propagateClipDimensions(
+  layers: AnimationLayer[],
+  clipId: string,
+  oldWidth: number, oldHeight: number,
+  newWidth: number, newHeight: number,
+): AnimationLayer[] {
+  if (oldWidth === newWidth && oldHeight === newHeight) return layers;
+  const scaleX = newWidth / oldWidth;
+  const scaleY = newHeight / oldHeight;
+  return layers.map((layer) => ({
+    ...layer,
+    keyframes: layer.keyframes.map((kf) => {
+      if (!kf.svgContent.includes(`data-flick-clip="${clipId}"`)) return kf;
+      return {
+        ...kf,
+        svgContent: kf.svgContent.replace(
+          /<image\s[^>]*data-flick-clip="[^"]+?"[^>]*(?:\/>|><\/image>)/g,
+          (match) => {
+            if (!match.includes(`data-flick-clip="${clipId}"`)) return match;
+            return match
+              .replace(/\bwidth="([^"]+)"/, (_, w) => `width="${parseFloat(w) * scaleX}"`)
+              .replace(/\bheight="([^"]+)"/, (_, h) => `height="${parseFloat(h) * scaleY}"`);
+          },
+        ),
+      };
+    }),
+  }));
+}
+
 /** Serialize layers to XML with configurable indent */
 function serializeLayersXml(layers: AnimationLayer[], indent: string): string {
   let xml = '';
@@ -247,7 +316,7 @@ function serializeLayersXml(layers: AnimationLayer[], indent: string): string {
 
     for (const kf of layer.keyframes) {
       xml += `${indent}  <keyframe frame="${kf.frame}" tween="${kf.tween}" easing="${kf.easing}">\n`;
-      xml += `${indent}    ${kf.svgContent}\n`;
+      xml += `${indent}    ${stripClipHrefs(kf.svgContent)}\n`;
       xml += `${indent}  </keyframe>\n`;
     }
 
@@ -563,16 +632,23 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   openProject: async (filePath: string) => {
     const raw = await window.api.readFile(filePath);
-    const { width, height, fps, totalFrames, background, layers, clips } = parseFlickXml(raw);
+    const parsed = parseFlickXml(raw);
+
+    // Re-inject clip hrefs stripped during save
+    const layers = injectClipHrefsInLayers(parsed.layers, parsed.clips);
+    const clips = parsed.clips.map((c) => ({
+      ...c,
+      layers: injectClipHrefsInLayers(c.layers, parsed.clips),
+    }));
 
     set({
       projectPath: filePath,
       dirty: false,
-      width,
-      height,
-      fps,
-      totalFrames,
-      background,
+      width: parsed.width,
+      height: parsed.height,
+      fps: parsed.fps,
+      totalFrames: parsed.totalFrames,
+      background: parsed.background,
       clips,
       layers,
       selectedLayerId: layers.length > 0 ? layers[0].id : null,
@@ -1416,6 +1492,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
   deleteClip: (id: string) => {
     if (!get().clips.some((c) => c.id === id)) return;
+    window.api.closeClipEditor(id);
     pushUndo();
 
     // Remove <image data-flick-clip="id"> from all keyframe SVGs

@@ -3,7 +3,7 @@ import { MenuBar } from './components/MenuBar';
 import { Canvas } from './components/Canvas';
 import { Timeline } from './components/Timeline';
 import { Inspector } from './components/Inspector';
-import { useProjectStore, isClipMode, editingClipId } from './store/projectStore';
+import { useProjectStore, isClipMode, editingClipId, propagateClipDimensions } from './store/projectStore';
 import './App.css';
 
 function App() {
@@ -104,12 +104,21 @@ function App() {
 
     const cleanupSync = window.api.onClipIncomingSync((clipId, clipData) => {
       const store = useProjectStore.getState();
-      // Push undo, update clip, recomposite
-      // We need to manually push undo here (not via the store's pushUndo
-      // which is only called from actions)
       const { layers, clips, undoStack } = store;
+      const oldClip = clips.find((c) => c.id === clipId);
+
+      // Propagate dimension changes to all keyframes referencing this clip
+      let updatedLayers = layers;
+      if (oldClip && (oldClip.width !== clipData.width || oldClip.height !== clipData.height)) {
+        updatedLayers = propagateClipDimensions(
+          layers, clipId,
+          oldClip.width, oldClip.height,
+          clipData.width, clipData.height,
+        );
+      }
+
       const newStack = [...undoStack, { layers, clips }].slice(-50);
-      const updatedClips = store.clips.map((c) =>
+      const updatedClips = clips.map((c) =>
         c.id === clipId
           ? { ...c, layers: clipData.layers, width: clipData.width, height: clipData.height, totalFrames: clipData.totalFrames, name: clipData.name }
           : c
@@ -117,6 +126,7 @@ function App() {
       useProjectStore.setState({
         undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true,
         clips: updatedClips,
+        layers: updatedLayers,
       });
       store.recomposite();
 

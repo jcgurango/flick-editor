@@ -63,6 +63,7 @@ export interface ElectronAPI {
   // ── Clip Editor IPC ──────────────────────────────────────
 
   openClipEditor(clipId: string, title: string): Promise<void>;
+  closeClipEditor(clipId: string): Promise<void>;
 
   // Clip window → Main
   syncClipState(clipId: string, clipData: ClipData): void;

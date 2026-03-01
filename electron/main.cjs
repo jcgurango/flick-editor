@@ -439,6 +439,13 @@ ipcMain.handle('clip:openEditor', (_event, clipId, title) => {
   });
 });
 
+ipcMain.handle('clip:closeEditor', (_event, clipId) => {
+  const win = clipEditorWindows.get(clipId);
+  if (win && !win.isDestroyed()) {
+    win.close();
+  }
+});
+
 // ── Inter-Window IPC (Clip ↔ Main) ────────────────────────
 
 // Clip window → Main: sync clip state

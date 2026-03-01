@@ -176,8 +176,10 @@ function resolveClipReferences(
         clip.totalFrames, clips, newVisited,
       );
 
-      // Replace the <image> with an inline <svg> containing the composited clip
-      return `<svg x="${ix}" y="${iy}" width="${iw}" height="${ih}" viewBox="0 0 ${clip.width} ${clip.height}">${clipContent}</svg>`;
+      // Render clip as a base64 <image> for correct scaling behavior
+      const fullSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${clip.width}" height="${clip.height}" viewBox="0 0 ${clip.width} ${clip.height}">${clipContent}</svg>`;
+      const b64 = btoa(unescape(encodeURIComponent(fullSvg)));
+      return `<image x="${ix}" y="${iy}" width="${iw}" height="${ih}" href="data:image/svg+xml;base64,${b64}"/>`;
     }
   );
 }

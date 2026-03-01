@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('api', {
   // Open a clip editor window
   openClipEditor: (clipId, title) => ipcRenderer.invoke('clip:openEditor', clipId, title),
 
+  // Close a clip editor window
+  closeClipEditor: (clipId) => ipcRenderer.invoke('clip:closeEditor', clipId),
+
   // Clip window → Main window: sync state
   syncClipState: (clipId, clipData) => ipcRenderer.send('clip:syncState', clipId, clipData),
 
