@@ -2,8 +2,34 @@ import { useState, useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { exportFrame } from '../lib/compositor';
 
+type ExportFormat = 'svg' | 'png';
+
 interface ExportDialogProps {
   onClose: () => void;
+}
+
+/** Rasterize an SVG string to a base64-encoded PNG via an offscreen canvas. */
+function rasterizeSvgToPngBase64(svg: string, w: number, h: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      const dataUrl = canvas.toDataURL('image/png');
+      resolve(dataUrl.replace('data:image/png;base64,', ''));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load SVG for rasterization'));
+    };
+    img.src = url;
+  });
 }
 
 export function ExportDialog({ onClose }: ExportDialogProps) {
@@ -16,6 +42,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const setExportPath = useProjectStore((s) => s.setExportPath);
   const clips = useProjectStore((s) => s.clips);
 
+  const [format, setFormat] = useState<ExportFormat>('svg');
   const [renderBg, setRenderBg] = useState(true);
   const [exportWidth, setExportWidth] = useState('');
   const [exportHeight, setExportHeight] = useState('');
@@ -27,6 +54,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   useEffect(() => {
     window.api.getConfig('exportSettings').then((val: any) => {
       if (!val) return;
+      if (val.format) setFormat(val.format);
       if (val.renderBg !== undefined) setRenderBg(val.renderBg);
       if (val.exportWidth) setExportWidth(val.exportWidth);
       if (val.exportHeight) setExportHeight(val.exportHeight);
@@ -35,6 +63,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
 
   const saveSettings = async () => {
     await window.api.setConfig('exportSettings', {
+      format,
       renderBg,
       exportWidth,
       exportHeight,
@@ -64,13 +93,22 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
     const ew = exportWidth ? parseInt(exportWidth, 10) : undefined;
     const eh = exportHeight ? parseInt(exportHeight, 10) : undefined;
     const bg = renderBg ? background : null;
+    const outW = ew || width;
+    const outH = eh || height;
 
     for (let f = 0; f < totalFrames; f++) {
       if (cancelRef.current) break;
 
       const svg = exportFrame(layers, f, width, height, bg, ew, eh, totalFrames, clips);
-      const filename = `frame_${String(f).padStart(4, '0')}.svg`;
-      await window.api.writeFile(await window.api.pathJoin(exportPath, filename), svg);
+
+      if (format === 'png') {
+        const base64 = await rasterizeSvgToPngBase64(svg, outW, outH);
+        const filename = `frame_${String(f).padStart(4, '0')}.png`;
+        await window.api.writeFileBase64(await window.api.pathJoin(exportPath, filename), base64);
+      } else {
+        const filename = `frame_${String(f).padStart(4, '0')}.svg`;
+        await window.api.writeFile(await window.api.pathJoin(exportPath, filename), svg);
+      }
 
       setProgress(f + 1);
       // Yield to UI
@@ -111,6 +149,17 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
                 Browse
               </button>
             </div>
+          </div>
+          <div className="dialog-field">
+            <label>Format</label>
+            <select
+              value={format}
+              onChange={(e) => setFormat(e.target.value as ExportFormat)}
+              disabled={exporting}
+            >
+              <option value="svg">SVG</option>
+              <option value="png">PNG</option>
+            </select>
           </div>
           <div className="dialog-field">
             <label>Background</label>

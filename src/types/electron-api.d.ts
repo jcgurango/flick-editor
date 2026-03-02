@@ -18,6 +18,7 @@ export interface ElectronAPI {
   // File I/O
   readFile(filePath: string): Promise<string>;
   writeFile(filePath: string, data: string): Promise<void>;
+  writeFileBase64(filePath: string, base64Data: string): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
   exists(filePath: string): Promise<boolean>;
 

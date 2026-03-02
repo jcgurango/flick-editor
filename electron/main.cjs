@@ -82,6 +82,10 @@ ipcMain.handle('fs:writeFile', async (_event, filePath, data) => {
   await fs.promises.writeFile(filePath, data, 'utf-8');
 });
 
+ipcMain.handle('fs:writeFileBase64', async (_event, filePath, base64Data) => {
+  await fs.promises.writeFile(filePath, Buffer.from(base64Data, 'base64'));
+});
+
 ipcMain.handle('fs:mkdir', async (_event, dirPath) => {
   await fs.promises.mkdir(dirPath, { recursive: true });
 });

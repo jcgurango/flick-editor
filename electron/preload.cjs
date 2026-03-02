@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   // File I/O
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', filePath, data),
+  writeFileBase64: (filePath, base64Data) => ipcRenderer.invoke('fs:writeFileBase64', filePath, base64Data),
   mkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', dirPath),
   exists: (filePath) => ipcRenderer.invoke('fs:exists', filePath),
 
