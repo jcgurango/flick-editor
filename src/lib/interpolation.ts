@@ -33,23 +33,8 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   const parser = new DOMParser();
   const serializer = new XMLSerializer();
 
-  const patchedA = ensureNamespaces(svgA);
-  const patchedB = ensureNamespaces(svgB);
-  const docA = parser.parseFromString(patchedA, 'image/svg+xml');
-  const docB = parser.parseFromString(patchedB, 'image/svg+xml');
-
-  const errA = docA.querySelector('parsererror');
-  const errB = docB.querySelector('parsererror');
-  if (errA || errB) {
-    console.error('[interpolateSvg] XML parse error', {
-      errorInA: errA?.textContent,
-      errorInB: errB?.textContent,
-      svgASnippet: patchedA.slice(0, 500),
-      svgBSnippet: patchedB.slice(0, 500),
-      svgALength: patchedA.length,
-      svgBLength: patchedB.length,
-    });
-  }
+  const docA = parser.parseFromString(ensureNamespaces(svgA), 'image/svg+xml');
+  const docB = parser.parseFromString(ensureNamespaces(svgB), 'image/svg+xml');
 
   const rootA = docA.documentElement;
   const rootB = docB.documentElement;
@@ -86,19 +71,6 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   for (const child of Array.from(output.childNodes)) {
     result += serializer.serializeToString(child);
   }
-
-  // Debug: validate output is parseable XML
-  const checkDoc = parser.parseFromString(
-    `<svg xmlns="http://www.w3.org/2000/svg">${result}</svg>`,
-    'image/svg+xml',
-  );
-  if (checkDoc.querySelector('parsererror')) {
-    console.error('[interpolateSvg] output is invalid XML', {
-      outputSnippet: result.slice(0, 500),
-      outputLength: result.length,
-    });
-  }
-
   return result;
 }
 

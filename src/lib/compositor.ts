@@ -211,20 +211,7 @@ export function compositeFrame(
 
     // Resolve clip references in this layer's content
     if (clips && clips.length > 0) {
-      const beforeResolve = inner;
       inner = resolveClipReferences(inner, clips, layer, frame, mode, visitedClips);
-      if (inner !== beforeResolve) {
-        const checkDoc = new DOMParser().parseFromString(
-          `<svg xmlns="http://www.w3.org/2000/svg">${inner}</svg>`,
-          'image/svg+xml',
-        );
-        if (checkDoc.querySelector('parsererror')) {
-          console.error('[compositeFrame] clip resolution produced invalid XML', {
-            snippet: inner.slice(0, 500),
-            length: inner.length,
-          });
-        }
-      }
     }
 
     // Build clip-path / mask defs if referenced
