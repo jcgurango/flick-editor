@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { useProjectStore, selectionRect } from '../store/projectStore';
 
 export function Timeline() {
@@ -18,6 +18,7 @@ export function Timeline() {
   const commitSelection = useProjectStore((s) => s.commitSelection);
   const selectLayer = useProjectStore((s) => s.selectLayer);
   const moveLayer = useProjectStore((s) => s.moveLayer);
+  const renameLayer = useProjectStore((s) => s.renameLayer);
   const playing = useProjectStore((s) => s.playing);
   const play = useProjectStore((s) => s.play);
   const stop = useProjectStore((s) => s.stop);
@@ -30,6 +31,25 @@ export function Timeline() {
   // Layer drag-reorder state
   const [dragLayerIdx, setDragLayerIdx] = useState<number | null>(null);
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+
+  // Layer rename state
+  const [renamingLayerId, setRenamingLayerId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (renamingLayerId && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [renamingLayerId]);
+
+  const commitRename = () => {
+    if (renamingLayerId) {
+      renameLayer(renamingLayerId, renameValue.trim());
+      setRenamingLayerId(null);
+    }
+  };
 
   // 0-indexed frames internally
   const frameIndices = Array.from({ length: totalFrames }, (_, i) => i);
@@ -299,7 +319,32 @@ export function Timeline() {
               >
                 &#x1F3A5;
               </button>
-              <span className="layer-name">{layer.id}</span>
+              {renamingLayerId === layer.id ? (
+                <input
+                  ref={renameInputRef}
+                  className="layer-name-input"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename();
+                    if (e.key === 'Escape') setRenamingLayerId(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span
+                  className="layer-name"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    setRenamingLayerId(layer.id);
+                    setRenameValue(layer.name || layer.id);
+                  }}
+                >
+                  {layer.name || layer.id}
+                </span>
+              )}
             </div>
             <div className="timeline-layer-frames">
               {frameIndices.map((f) => (

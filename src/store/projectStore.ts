@@ -30,6 +30,7 @@ export interface Keyframe {
 
 export interface AnimationLayer {
   id: string;
+  name?: string;              // display name (empty = show id)
   renderVisible: boolean;   // included in export (camera)
   viewportVisible: boolean; // visible in editor (eye)
   clipLayerId: string | null;  // layer used as clip-path (compositing only)
@@ -141,6 +142,7 @@ export interface ProjectState extends MovieClip {
 
   addLayer: () => Promise<void>;
   removeLayer: (id: string) => void;
+  renameLayer: (id: string, name: string) => void;
   moveLayer: (fromIdx: number, toIdx: number) => void;
   toggleRenderVisible: (id: string) => void;
   toggleViewportVisible: (id: string) => void;
@@ -313,7 +315,7 @@ export function propagateClipDimensions(
 function serializeLayersXml(layers: AnimationLayer[], indent: string): string {
   let xml = '';
   for (const layer of layers) {
-    xml += `${indent}<layer id="${escXml(layer.id)}" render-visible="${layer.renderVisible}" viewport-visible="${layer.viewportVisible}"`;
+    xml += `${indent}<layer id="${escXml(layer.id)}"${layer.name ? ` name="${escXml(layer.name)}"` : ''} render-visible="${layer.renderVisible}" viewport-visible="${layer.viewportVisible}"`;
     xml += ` clip="${escXml(layer.clipLayerId ?? '')}" mask="${escXml(layer.maskLayerId ?? '')}"`;
     xml += ` loop="${layer.loop}" ghost-end-frame="${layer.ghostEndFrame}">\n`;
 
@@ -383,6 +385,7 @@ function parseLayersXml(containerEl: Element, serializer: XMLSerializer): Animat
 
     layers.push({
       id: layerEl.getAttribute('id') || '',
+      name: layerEl.getAttribute('name') || '',
       renderVisible: layerEl.getAttribute('render-visible') !== 'false',
       viewportVisible: layerEl.getAttribute('viewport-visible') !== 'false',
       clipLayerId: layerEl.getAttribute('clip') || null,
@@ -791,6 +794,7 @@ ${layersSvg}</svg>`;
 
     const newLayer: AnimationLayer = {
       id,
+      name: '',
       renderVisible: true,
       viewportVisible: true,
       clipLayerId: null,
@@ -819,6 +823,16 @@ ${layersSvg}</svg>`;
       };
     });
     get().recomposite();
+  },
+
+  renameLayer: (id: string, name: string) => {
+    const layer = get().layers.find((l) => l.id === id);
+    if (!layer || layer.name === name) return;
+    pushUndo();
+    set((s) => ({
+      layers: s.layers.map((l) => l.id === id ? { ...l, name } : l),
+      dirty: true,
+    }));
   },
 
   moveLayer: (fromIdx: number, toIdx: number) => {
@@ -1476,6 +1490,7 @@ ${layersSvg}</svg>`;
       totalFrames: 1,
       layers: [{
         id: 'layer-1',
+        name: '',
         renderVisible: true,
         viewportVisible: true,
         clipLayerId: null,
