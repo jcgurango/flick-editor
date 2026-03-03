@@ -490,6 +490,8 @@ function parseFlickXml(xmlString: string): {
   return { width, height, fps, totalFrames, background, layers, clips, exportPath };
 }
 
+const CLIP_PADDING = 20;
+
 /** Compute bounding box of a group element within an SVG string */
 function computeGroupBBox(fullSvgContent: string, groupId: string):
   { x: number; y: number; width: number; height: number } | null {
@@ -501,7 +503,7 @@ function computeGroupBBox(fullSvgContent: string, groupId: string):
     const el = container.querySelector(`#${CSS.escape(groupId)}`) as SVGGraphicsElement | null;
     if (!el) return null;
     const bbox = el.getBBox();
-    return { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height };
+    return { x: bbox.x - CLIP_PADDING, y: bbox.y - CLIP_PADDING, width: bbox.width + CLIP_PADDING * 2, height: bbox.height + CLIP_PADDING * 2 };
   } finally {
     document.body.removeChild(container);
   }
