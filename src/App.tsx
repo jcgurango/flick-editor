@@ -50,11 +50,8 @@ function App() {
         fps: meta.fps,
         projectPath: meta.projectPath,
       });
+      // recomposite handles syncClipsToInkscape and staleness-checks before reloading
       store.recomposite();
-      if (store.editingKeyframe) {
-        store.syncClipsToInkscape();
-        store.reloadInkscapeDocument();
-      }
       setTimeout(() => { syncingRef.current = false; }, 0);
     });
 
