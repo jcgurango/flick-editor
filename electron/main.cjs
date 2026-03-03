@@ -204,21 +204,16 @@ function parseInkscapeStdout(stream) {
           continue;
         }
 
-        // NCLIP <element-id>
-        const nclipMatch = line.match(/^NCLIP (.+)$/);
+        // NCLIP <window-id> <element-id>
+        const nclipMatch = line.match(/^NCLIP (\d+) (.+)$/);
         if (nclipMatch) {
-          process.stdout.write(`[ink stdout] NCLIP`);
-          // NCLIP doesn't include a window ID; route to the most recently
-          // active renderer that has an Inkscape window open.
-          // In practice, NCLIP follows a SAVE which sets `expecting`, so we
-          // can't easily know which window triggered it. Forward to all
-          // renderers that have an Inkscape window.
-          // Actually, NCLIP always follows the last SAVE. We track that.
-          if (lastSaveRendererId !== undefined) {
-            const win = findWindowForRenderer(lastSaveRendererId);
-            if (win) win.webContents.send('inkscape:nclip', nclipMatch[1]);
-          } else if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('inkscape:nclip', nclipMatch[1]);
+          const windowId = parseInt(nclipMatch[1]);
+          const elementId = nclipMatch[2];
+          process.stdout.write(`[ink stdout] NCLIP ${windowId} ${elementId}`);
+          const rendererId = rendererForInkscapeWindow.get(windowId);
+          if (rendererId !== undefined) {
+            const win = findWindowForRenderer(rendererId);
+            if (win) win.webContents.send('inkscape:nclip', elementId);
           }
           continue;
         }
@@ -281,7 +276,6 @@ function parseInkscapeStdout(stream) {
       buffer = buf.subarray(expecting.contentLength).toString('utf-8');
 
       const rendererId = rendererForInkscapeWindow.get(expecting.windowId);
-      lastSaveRendererId = rendererId;
       if (rendererId !== undefined) {
         const win = findWindowForRenderer(rendererId);
         if (win) {
@@ -293,8 +287,6 @@ function parseInkscapeStdout(stream) {
   });
 }
 
-// Track which renderer received the last SAVE (for NCLIP routing)
-let lastSaveRendererId = undefined;
 
 function ensureInkscape() {
   return new Promise((resolve, reject) => {
@@ -475,6 +467,13 @@ ipcMain.on('clip:requestUndo', (_event, clipId) => {
 ipcMain.on('clip:requestRedo', (_event, clipId) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('clip:redoRequest', clipId);
+  }
+});
+
+// Clip window → Main: NCLIP created in child, register in main
+ipcMain.on('clip:nclip', (_event, ownerClipId, data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('clip:nclip', ownerClipId, data);
   }
 });
 

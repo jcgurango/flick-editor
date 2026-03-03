@@ -1,9 +1,19 @@
+export interface NClipData {
+  newClip: import('../store/projectStore').MovieClip;
+  newSvgContent: string;
+  layerId: string;
+  frame: number;
+  clipRegSvg: string;
+  clipName: string;
+}
+
 export interface ClipData {
   layers: import('../store/projectStore').AnimationLayer[];
   width: number;
   height: number;
   totalFrames: number;
   name: string;
+  clips?: import('../store/projectStore').MovieClip[];  // populated in main→child broadcasts
 }
 
 export interface ClipMeta {
@@ -68,6 +78,7 @@ export interface ElectronAPI {
 
   // Clip window → Main
   syncClipState(clipId: string, clipData: ClipData): void;
+  sendNClipToMain(ownerClipId: string, data: NClipData): void;
   requestClipUndo(clipId: string): void;
   requestClipRedo(clipId: string): void;
   requestClipSave(): void;
@@ -81,6 +92,7 @@ export interface ElectronAPI {
 
   // Main window: listeners
   onClipIncomingSync(callback: (clipId: string, clipData: ClipData) => void): () => void;
+  onClipNClip(callback: (ownerClipId: string, data: NClipData) => void): () => void;
   onClipUndoRequest(callback: (clipId: string) => void): () => void;
   onClipRedoRequest(callback: (clipId: string) => void): () => void;
   onClipSaveRequest(callback: () => void): () => void;

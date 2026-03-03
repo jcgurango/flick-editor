@@ -3,7 +3,7 @@ import { MenuBar } from './components/MenuBar';
 import { Canvas } from './components/Canvas';
 import { Timeline } from './components/Timeline';
 import { Inspector } from './components/Inspector';
-import { useProjectStore, isClipMode, editingClipId, propagateClipDimensions } from './store/projectStore';
+import { useProjectStore, isClipMode, editingClipId, propagateClipDimensionsAll } from './store/projectStore';
 import './App.css';
 
 function App() {
@@ -39,6 +39,7 @@ function App() {
       const store = useProjectStore.getState();
       useProjectStore.setState({
         layers: clipData.layers,
+        ...(clipData.clips !== undefined ? { clips: clipData.clips } : {}),
         width: clipData.width,
         height: clipData.height,
         totalFrames: clipData.totalFrames,
@@ -111,38 +112,33 @@ function App() {
       const { layers, clips, undoStack } = store;
       const oldClip = clips.find((c) => c.id === clipId);
 
-      // Propagate dimension changes to all keyframes referencing this clip
-      let updatedLayers = layers;
-      if (oldClip && (oldClip.width !== clipData.width || oldClip.height !== clipData.height)) {
-        updatedLayers = propagateClipDimensions(
-          layers, clipId,
-          oldClip.width, oldClip.height,
-          clipData.width, clipData.height,
-        );
-      }
-
-      const newStack = [...undoStack, { layers, clips }].slice(-50);
-      const updatedClips = clips.map((c) =>
+      // First apply the incoming clip update
+      let updatedClips = clips.map((c) =>
         c.id === clipId
           ? { ...c, layers: clipData.layers, width: clipData.width, height: clipData.height, totalFrames: clipData.totalFrames, name: clipData.name }
           : c
       );
+
+      // Propagate dimension changes through state.layers AND all clips-within-clips
+      let updatedLayers = layers;
+      if (oldClip && (oldClip.width !== clipData.width || oldClip.height !== clipData.height)) {
+        const propagated = propagateClipDimensionsAll(
+          layers, updatedClips, clipId,
+          oldClip.width, oldClip.height,
+          clipData.width, clipData.height,
+        );
+        updatedLayers = propagated.layers;
+        updatedClips = propagated.clips;
+      }
+
+      const newStack = [...undoStack, { layers, clips }].slice(-50);
       useProjectStore.setState({
         undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true,
         clips: updatedClips,
         layers: updatedLayers,
       });
       store.recomposite();
-
-      // Broadcast updated meta back to clip window
-      const updated = useProjectStore.getState();
-      window.api.broadcastClipState(clipId, clipData, {
-        canUndo: updated.canUndo,
-        canRedo: updated.canRedo,
-        dirty: updated.dirty,
-        fps: updated.fps,
-        projectPath: updated.projectPath,
-      });
+      // unsubClips subscription handles broadcasting to all editors
     });
 
     const cleanupUndoReq = window.api.onClipUndoRequest((clipId) => {
@@ -150,48 +146,42 @@ function App() {
       store.undo();
       // After undo, broadcast updated clip state back
       const updated = useProjectStore.getState();
-      const clip = updated.clips.find((c) => c.id === clipId);
-      if (clip) {
-        window.api.broadcastClipState(clipId, {
-          layers: clip.layers,
-          width: clip.width,
-          height: clip.height,
-          totalFrames: clip.totalFrames,
-          name: clip.name,
-        }, {
-          canUndo: updated.canUndo,
-          canRedo: updated.canRedo,
-          dirty: updated.dirty,
-          fps: updated.fps,
-          projectPath: updated.projectPath,
-        });
-      }
+      // unsubClips subscription handles broadcasting to all editors
     });
 
     const cleanupRedoReq = window.api.onClipRedoRequest((clipId) => {
       const store = useProjectStore.getState();
       store.redo();
-      const updated = useProjectStore.getState();
-      const clip = updated.clips.find((c) => c.id === clipId);
-      if (clip) {
-        window.api.broadcastClipState(clipId, {
-          layers: clip.layers,
-          width: clip.width,
-          height: clip.height,
-          totalFrames: clip.totalFrames,
-          name: clip.name,
-        }, {
-          canUndo: updated.canUndo,
-          canRedo: updated.canRedo,
-          dirty: updated.dirty,
-          fps: updated.fps,
-          projectPath: updated.projectPath,
-        });
-      }
+      // unsubClips subscription handles broadcasting to all editors
     });
 
     const cleanupSaveReq = window.api.onClipSaveRequest(() => {
       useProjectStore.getState().saveProject();
+    });
+
+    const cleanupNClip = window.api.onClipNClip((ownerClipId, data) => {
+      const store = useProjectStore.getState();
+      // Update the owner clip's layers (replace element with placeholder) and add the new clip
+      const updatedClips = store.clips.map((c) => {
+        if (c.id !== ownerClipId) return c;
+        return {
+          ...c,
+          layers: c.layers.map((l) => {
+            if (l.id !== data.layerId) return l;
+            return {
+              ...l,
+              keyframes: l.keyframes.map((k) =>
+                k.frame === data.frame ? { ...k, svgContent: data.newSvgContent } : k
+              ),
+            };
+          }),
+        };
+      });
+      useProjectStore.setState({ clips: [...updatedClips, data.newClip], dirty: true });
+      store.recomposite();
+      window.api.inkscapeClip(data.newClip.id, data.clipName, data.clipRegSvg);
+      window.api.inkscapeDirty();
+      // unsubClips subscription handles broadcasting to all editors
     });
 
     const cleanupStateReq = window.api.onClipStateRequest((clipId) => {
@@ -204,6 +194,7 @@ function App() {
           height: clip.height,
           totalFrames: clip.totalFrames,
           name: clip.name,
+          clips: state.clips,
         }, {
           canUndo: state.canUndo,
           canRedo: state.canRedo,
@@ -211,6 +202,29 @@ function App() {
           fps: state.fps,
           projectPath: state.projectPath,
         });
+      }
+    });
+
+    // Subscribe to clips changes and broadcast all clip states to all open editors.
+    // This ensures every editor stays aware of sibling clip updates (e.g. clips-within-clips).
+    const unsubClips = useProjectStore.subscribe((state, prev) => {
+      if (state.clips === prev.clips) return;
+      const meta = {
+        canUndo: state.canUndo,
+        canRedo: state.canRedo,
+        dirty: state.dirty,
+        fps: state.fps,
+        projectPath: state.projectPath,
+      };
+      for (const clip of state.clips) {
+        window.api.broadcastClipState(clip.id, {
+          layers: clip.layers,
+          width: clip.width,
+          height: clip.height,
+          totalFrames: clip.totalFrames,
+          name: clip.name,
+          clips: state.clips,
+        }, meta);
       }
     });
 
@@ -238,7 +252,9 @@ function App() {
       cleanupUndoReq();
       cleanupRedoReq();
       cleanupSaveReq();
+      cleanupNClip();
       cleanupStateReq();
+      unsubClips();
       unsubMeta();
     };
   }, []);

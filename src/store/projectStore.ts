@@ -317,6 +317,24 @@ export function propagateClipDimensions(
   }));
 }
 
+/** Apply `propagateClipDimensions` to both `state.layers` and every clip's layers. */
+export function propagateClipDimensionsAll(
+  layers: AnimationLayer[],
+  clips: MovieClip[],
+  clipId: string,
+  oldWidth: number, oldHeight: number,
+  newWidth: number, newHeight: number,
+): { layers: AnimationLayer[]; clips: MovieClip[] } {
+  if (oldWidth === newWidth && oldHeight === newHeight) return { layers, clips };
+  return {
+    layers: propagateClipDimensions(layers, clipId, oldWidth, oldHeight, newWidth, newHeight),
+    clips: clips.map((c) => ({
+      ...c,
+      layers: propagateClipDimensions(c.layers, clipId, oldWidth, oldHeight, newWidth, newHeight),
+    })),
+  };
+}
+
 /** Serialize layers to XML with configurable indent */
 function serializeLayersXml(layers: AnimationLayer[], indent: string): string {
   let xml = '';
@@ -518,6 +536,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         height: clip.height,
         totalFrames: clip.totalFrames,
         name: clip.name,
+        clips: state.clips,
       }, meta);
     }
   }
@@ -1545,6 +1564,23 @@ ${layersSvg}</svg>`;
     const svgRoot = doc.documentElement;
     const newSvgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${serializeChildren(svgRoot).trim()}\n</svg>`;
 
+    // Register image placeholder with Inkscape's Clip Panel
+    const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="0 0 ${bbox.width} ${bbox.height}">\n<image data-flick-clip="${clipId}" href="data:image/svg+xml;base64,${b64}" width="${bbox.width}" height="${bbox.height}" />\n</svg>`;
+
+    if (isClipMode) {
+      // In clip mode the store is a local mirror — forward clip creation to the main window,
+      // which owns the canonical state.clips and will broadcast the updated clip back here.
+      api.sendNClipToMain(editingClipId!, {
+        newClip,
+        newSvgContent,
+        layerId,
+        frame,
+        clipRegSvg: imageSvg,
+        clipName,
+      });
+      return;
+    }
+
     // Update store — no pushUndo() here; the preceding SAVE already pushed
     // the pre-group state, so undo skips the intermediate grouped state.
     set((s) => ({
@@ -1560,8 +1596,6 @@ ${layersSvg}</svg>`;
       }),
     }));
 
-    // Register image placeholder with Inkscape's Clip Panel
-    const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bbox.width}" height="${bbox.height}" viewBox="0 0 ${bbox.width} ${bbox.height}">\n<image data-flick-clip="${clipId}" href="data:image/svg+xml;base64,${b64}" width="${bbox.width}" height="${bbox.height}" />\n</svg>`;
     api.inkscapeClip(clipId, clipName, imageSvg);
     api.inkscapeDirty();
     get().reloadInkscapeDocument();

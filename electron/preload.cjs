@@ -72,6 +72,9 @@ contextBridge.exposeInMainWorld('api', {
   // Clip window → Main window: sync state
   syncClipState: (clipId, clipData) => ipcRenderer.send('clip:syncState', clipId, clipData),
 
+  // Clip window → Main window: forward a new-clip created via NCLIP
+  sendNClipToMain: (ownerClipId, data) => ipcRenderer.send('clip:nclip', ownerClipId, data),
+
   // Clip window → Main window: request undo/redo/save
   requestClipUndo: (clipId) => ipcRenderer.send('clip:requestUndo', clipId),
   requestClipRedo: (clipId) => ipcRenderer.send('clip:requestRedo', clipId),
@@ -95,6 +98,13 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, clipId, clipData) => callback(clipId, clipData);
     ipcRenderer.on('clip:incomingSync', listener);
     return () => ipcRenderer.removeListener('clip:incomingSync', listener);
+  },
+
+  // Main window: listen for NCLIP forwarded from a clip editor
+  onClipNClip: (callback) => {
+    const listener = (_event, ownerClipId, data) => callback(ownerClipId, data);
+    ipcRenderer.on('clip:nclip', listener);
+    return () => ipcRenderer.removeListener('clip:nclip', listener);
   },
 
   // Main window: listen for undo/redo/save requests from clip windows
