@@ -486,6 +486,27 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     set({ undoStack: newStack, redoStack: [], canUndo: true, canRedo: false, dirty: true });
   }
 
+  /** Broadcast current clip state to all open clip editor windows */
+  function broadcastAllClipStates() {
+    const state = get();
+    const meta = {
+      canUndo: state.canUndo,
+      canRedo: state.canRedo,
+      dirty: state.dirty,
+      fps: state.fps,
+      projectPath: state.projectPath,
+    };
+    for (const clip of state.clips) {
+      window.api.broadcastClipState(clip.id, {
+        layers: clip.layers,
+        width: clip.width,
+        height: clip.height,
+        totalFrames: clip.totalFrames,
+        name: clip.name,
+      }, meta);
+    }
+  }
+
   /** Clean up Inkscape listeners and clear editing state */
   function clearEditing() {
     const state = get();
@@ -571,6 +592,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       get().syncClipsToInkscape();
       get().reloadInkscapeDocument();
     }
+    broadcastAllClipStates();
   },
 
   redo: () => {
@@ -596,6 +618,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       get().syncClipsToInkscape();
       get().reloadInkscapeDocument();
     }
+    broadcastAllClipStates();
   },
 
   // ── Project lifecycle ───────────────────────────────────
@@ -1468,16 +1491,23 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   },
 
   syncClipsToInkscape: () => {
-    const { clips } = get();
+    const { clips, currentFrame } = get();
     const api = window.api;
     for (const clip of clips) {
       // In clip mode, exclude the currently-editing clip to prevent circular refs
       if (isClipMode && clip.id === editingClipId) continue;
-      const firstLayer = clip.layers[0];
-      if (!firstLayer) continue;
-      const firstKf = firstLayer.keyframes[0];
-      if (!firstKf) continue;
-      const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
+      if (clip.layers.length === 0) continue;
+
+      // Render the clip at the frame it would be showing on the current timeline position
+      const clipFrame = clip.totalFrames > 0
+        ? currentFrame % clip.totalFrames
+        : 0;
+      const clipContent = compositeFrame(
+        clip.layers, clipFrame, clip.width, clip.height, 'viewport',
+        clip.totalFrames, clips,
+      );
+      const fullSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${clip.width}" height="${clip.height}" viewBox="0 0 ${clip.width} ${clip.height}">${clipContent}</svg>`;
+      const b64 = btoa(unescape(encodeURIComponent(fullSvg)));
       const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${clip.width}" height="${clip.height}" viewBox="0 0 ${clip.width} ${clip.height}">\n<image data-flick-clip="${clip.id}" href="data:image/svg+xml;base64,${b64}" width="${clip.width}" height="${clip.height}" />\n</svg>`;
       api.inkscapeClip(clip.id, clip.name, imageSvg);
     }
@@ -1490,16 +1520,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     set((s) => ({
       clips: s.clips.map((c) => c.id === id ? { ...c, name } : c),
     }));
-    // Re-register with Inkscape under new name
-    const updated = get().clips.find((c) => c.id === id);
-    if (updated) {
-      const firstKf = updated.layers[0]?.keyframes[0];
-      if (firstKf) {
-        const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
-        const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${updated.width}" height="${updated.height}" viewBox="0 0 ${updated.width} ${updated.height}">\n<image data-flick-clip="${id}" href="data:image/svg+xml;base64,${b64}" width="${updated.width}" height="${updated.height}" />\n</svg>`;
-        window.api.inkscapeClip(id, name, imageSvg);
-      }
-    }
+    get().syncClipsToInkscape();
     if (get().editingKeyframe) window.api.inkscapeDirty();
   },
 
@@ -1525,13 +1546,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
     set((s) => ({ clips: [...s.clips, newClip] }));
 
-    // Register with Inkscape
-    const firstKf = newClip.layers[0]?.keyframes[0];
-    if (firstKf) {
-      const b64 = btoa(unescape(encodeURIComponent(firstKf.svgContent)));
-      const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${newClip.width}" height="${newClip.height}" viewBox="0 0 ${newClip.width} ${newClip.height}">\n<image data-flick-clip="${newId}" href="data:image/svg+xml;base64,${b64}" width="${newClip.width}" height="${newClip.height}" />\n</svg>`;
-      window.api.inkscapeClip(newId, newName, imageSvg);
-    }
+    get().syncClipsToInkscape();
     if (get().editingKeyframe) window.api.inkscapeDirty();
   },
 
@@ -1582,9 +1597,12 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   // ── Compositor ──────────────────────────────────────────
 
   recomposite: () => {
-    const { layers, currentFrame, width, height, totalFrames, clips } = get();
+    const { layers, currentFrame, width, height, totalFrames, clips, editingKeyframe } = get();
     const combined = compositeFrame(layers, currentFrame, width, height, 'viewport', totalFrames, clips);
     set({ compositedSvg: combined });
+    if (editingKeyframe && clips.length > 0) {
+      get().syncClipsToInkscape();
+    }
   },
 };
 });

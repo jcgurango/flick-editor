@@ -50,6 +50,10 @@ function App() {
         projectPath: meta.projectPath,
       });
       store.recomposite();
+      if (store.editingKeyframe) {
+        store.syncClipsToInkscape();
+        store.reloadInkscapeDocument();
+      }
       setTimeout(() => { syncingRef.current = false; }, 0);
     });
 
