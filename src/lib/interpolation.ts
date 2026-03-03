@@ -56,14 +56,6 @@ export function interpolateSvg(svgA: string, svgB: string, t: number): string {
   // Walk A's tree to preserve order, interpolating where matched
   processNode(rootA, output, docA, mapA, mapB, t, processedIds, serializer);
 
-  // Add B-only elements (fade in)
-  for (const [id, elemB] of mapB) {
-    if (processedIds.has(id)) continue;
-    const clone = docA.importNode(elemB, true);
-    clone.setAttribute('opacity', String(t));
-    output.appendChild(clone);
-  }
-
   // Serialize children individually so each carries its own namespace
   // declarations — avoids losing them when the caller embeds the result
   // inside a parent <g> or <svg>.
@@ -149,12 +141,6 @@ function processNode(
       processNode(elemA, interpolated, doc, mapA, mapB, t, processedIds, serializer);
 
       parent.appendChild(interpolated);
-    } else if (id) {
-      // A-only element — fade out
-      processedIds.add(id);
-      const clone = doc.importNode(elemA, true);
-      clone.setAttribute('opacity', String(1 - t));
-      parent.appendChild(clone);
     } else {
       // No ID — clone as-is
       const clone = doc.importNode(elemA, true);

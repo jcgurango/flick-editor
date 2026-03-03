@@ -8,6 +8,37 @@ interface ExportDialogProps {
   onClose: () => void;
 }
 
+/** Rasterize a video frame at a given time to a JPEG data URL. */
+async function rasterizeVideoFrame(
+  videoSrc: string,
+  time: number,
+  w: number,
+  h: number,
+  videoEl?: HTMLVideoElement,
+): Promise<{ dataUrl: string; video: HTMLVideoElement }> {
+  const video = videoEl || document.createElement('video');
+  if (!videoEl) {
+    video.src = videoSrc;
+    video.crossOrigin = 'anonymous';
+    video.preload = 'auto';
+    video.muted = true;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadeddata = () => resolve();
+      video.onerror = () => reject(new Error('Failed to load video'));
+    });
+  }
+  video.currentTime = time;
+  await new Promise<void>((resolve) => {
+    video.onseeked = () => resolve();
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(video, 0, 0, w, h);
+  return { dataUrl: canvas.toDataURL('image/jpeg', 0.9), video };
+}
+
 /** Rasterize an SVG string to a base64-encoded PNG via an offscreen canvas. */
 function rasterizeSvgToPngBase64(svg: string, w: number, h: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -36,6 +67,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const layers = useProjectStore((s) => s.layers);
   const width = useProjectStore((s) => s.width);
   const height = useProjectStore((s) => s.height);
+  const fps = useProjectStore((s) => s.fps);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const background = useProjectStore((s) => s.background);
   const exportPath = useProjectStore((s) => s.exportPath);
@@ -96,10 +128,23 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
     const outW = ew || width;
     const outH = eh || height;
 
+    // For video backgrounds, pre-create a reusable video element
+    let videoEl: HTMLVideoElement | undefined;
+    const isVideoBg = bg?.type === 'video' && bg.imageData;
+
     for (let f = 0; f < totalFrames; f++) {
       if (cancelRef.current) break;
 
-      const svg = exportFrame(layers, f, width, height, bg, ew, eh, totalFrames, clips);
+      let frameBg = bg;
+      if (isVideoBg && bg) {
+        // Rasterize the video frame to a JPEG data URL, then pass as image background
+        const time = bg.videoStartTime + f / fps;
+        const result = await rasterizeVideoFrame(bg.imageData, time, width, height, videoEl);
+        videoEl = result.video;
+        frameBg = { ...bg, type: 'image', imageData: result.dataUrl };
+      }
+
+      const svg = exportFrame(layers, f, width, height, frameBg, ew, eh, totalFrames, clips);
 
       if (format === 'png') {
         const base64 = await rasterizeSvgToPngBase64(svg, outW, outH);

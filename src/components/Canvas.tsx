@@ -5,6 +5,8 @@ export function Canvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const width = useProjectStore((s) => s.width);
   const height = useProjectStore((s) => s.height);
@@ -13,10 +15,14 @@ export function Canvas() {
   const panY = useProjectStore((s) => s.canvasPanY);
   const compositedSvg = useProjectStore((s) => s.compositedSvg);
   const background = useProjectStore((s) => s.background);
+  const playing = useProjectStore((s) => s.playing);
+  const currentFrame = useProjectStore((s) => s.currentFrame);
+  const fps = useProjectStore((s) => s.fps);
   const setCanvasZoom = useProjectStore((s) => s.setCanvasZoom);
   const setCanvasPan = useProjectStore((s) => s.setCanvasPan);
   const setCanvasContainerSize = useProjectStore((s) => s.setCanvasContainerSize);
   const resetCanvasView = useProjectStore((s) => s.resetCanvasView);
+  const setVideoSnapshot = useProjectStore((s) => s.setVideoSnapshot);
 
   // Track container size
   useEffect(() => {
@@ -78,6 +84,67 @@ export function Canvas() {
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
+  // Capture a JPEG snapshot of the current video frame for Inkscape/export
+  const captureVideoSnapshot = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0) return;
+    if (!snapshotCanvasRef.current) {
+      snapshotCanvasRef.current = document.createElement('canvas');
+    }
+    const canvas = snapshotCanvasRef.current;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    setVideoSnapshot(dataUrl);
+  }, [width, height, setVideoSnapshot]);
+
+  // Video playback sync — seek on start, re-seek on loop, pause on stop
+  const prevFrameRef = useRef(-1);
+  useEffect(() => {
+    if (background.type !== 'video') return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (playing) {
+      // Seek to correct position and start playing
+      const state = useProjectStore.getState();
+      video.currentTime = background.videoStartTime + state.currentFrame / fps;
+      video.play().catch(() => {});
+      prevFrameRef.current = state.currentFrame;
+
+      // Subscribe to frame changes to detect loop wraps
+      const unsub = useProjectStore.subscribe((state) => {
+        const frame = state.currentFrame;
+        if (frame < prevFrameRef.current) {
+          // Animation looped — re-seek the video
+          video.currentTime = background.videoStartTime + frame / fps;
+        }
+        prevFrameRef.current = frame;
+      });
+      return unsub;
+    } else {
+      video.pause();
+      prevFrameRef.current = -1;
+    }
+  }, [playing, background.type, background.videoStartTime, fps]);
+
+  // Video scrub sync (when not playing)
+  useEffect(() => {
+    if (background.type !== 'video') return;
+    if (playing) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.currentTime = background.videoStartTime + currentFrame / fps;
+
+    // Capture snapshot once seeked
+    const onSeeked = () => captureVideoSnapshot();
+    video.addEventListener('seeked', onSeeked, { once: true });
+    return () => video.removeEventListener('seeked', onSeeked);
+  }, [currentFrame, playing, background.type, background.videoStartTime, fps, captureVideoSnapshot]);
+
   return (
     <div
       className="canvas-container"
@@ -115,6 +182,21 @@ export function Canvas() {
                 width={width}
                 height={height}
               />
+            </>
+          )}
+          {background.type === 'video' && background.imageData && (
+            <>
+              <rect width={width} height={height} fill="black" />
+              <foreignObject width={width} height={height}>
+                <video
+                  ref={videoRef}
+                  src={background.imageData}
+                  width={width}
+                  height={height}
+                  muted={!background.videoAudio}
+                  style={{ display: 'block', objectFit: 'fill' }}
+                />
+              </foreignObject>
             </>
           )}
           {/* Render composited SVG content */}

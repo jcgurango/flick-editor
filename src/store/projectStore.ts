@@ -14,11 +14,13 @@ export type TweenType = 'discrete' | 'linear' | 'quadratic' | 'cubic'
   | 'exponential' | 'circular' | 'elastic' | 'bounce';
 export type EasingDirection = 'in' | 'out' | 'in-out';
 
-export type BackgroundType = 'none' | 'solid' | 'image';
+export type BackgroundType = 'none' | 'solid' | 'image' | 'video';
 export interface BackgroundSettings {
   type: BackgroundType;
   color: string;       // hex, used when type === 'solid'
-  imageData: string;   // URL (file:/// or http://), used when type === 'image'
+  imageData: string;   // URL (file:/// or http://), used when type === 'image' or 'video'
+  videoStartTime: number;  // seconds offset into the video
+  videoAudio: boolean;     // whether to play audio (default true)
 }
 
 export interface Keyframe {
@@ -121,6 +123,9 @@ export interface ProjectState extends MovieClip {
   // Composited SVG content for display
   compositedSvg: string;
 
+  // Video background snapshot (JPEG data URL for Inkscape/export, not persisted)
+  videoSnapshot: string;
+
   // Inkscape editing state
   editingKeyframe: EditingState | null;
   lastKnownInkscapeState: Map<string, string>;
@@ -187,6 +192,7 @@ export interface ProjectState extends MovieClip {
   setFps: (fps: number) => void;
   setTotalFrames: (totalFrames: number) => void;
   setBackground: (bg: Partial<BackgroundSettings>) => void;
+  setVideoSnapshot: (dataUrl: string) => void;
   setExportPath: (path: string | null) => void;
 
   // ── Undo/Redo ─────────────────────────────────────────
@@ -346,6 +352,8 @@ function buildFlickXml(state: {
 
   if (state.background.type === 'image' && state.background.imageData) {
     xml += `  <background type="image"><image-data><![CDATA[${state.background.imageData}]]></image-data></background>\n`;
+  } else if (state.background.type === 'video' && state.background.imageData) {
+    xml += `  <background type="video" start-time="${state.background.videoStartTime}" audio="${state.background.videoAudio}"><image-data><![CDATA[${state.background.imageData}]]></image-data></background>\n`;
   } else {
     xml += `  <background type="${state.background.type}" color="${escXml(state.background.color)}"/>\n`;
   }
@@ -421,14 +429,23 @@ function parseFlickXml(xmlString: string): {
 
   // Background
   const bgEl = root.querySelector('background');
-  let background: BackgroundSettings = { type: 'none', color: '#ffffff', imageData: '' };
+  let background: BackgroundSettings = { type: 'none', color: '#ffffff', imageData: '', videoStartTime: 0, videoAudio: true };
   if (bgEl) {
     const bgType = (bgEl.getAttribute('type') || 'none') as BackgroundType;
     if (bgType === 'image') {
       const imgData = bgEl.querySelector('image-data');
-      background = { type: 'image', color: '#ffffff', imageData: imgData?.textContent ?? '' };
+      background = { type: 'image', color: '#ffffff', imageData: imgData?.textContent ?? '', videoStartTime: 0, videoAudio: true };
+    } else if (bgType === 'video') {
+      const imgData = bgEl.querySelector('image-data');
+      background = {
+        type: 'video',
+        color: '#ffffff',
+        imageData: imgData?.textContent ?? '',
+        videoStartTime: parseFloat(bgEl.getAttribute('start-time') || '0'),
+        videoAudio: bgEl.getAttribute('audio') !== 'false',
+      };
     } else {
-      background = { type: bgType, color: bgEl.getAttribute('color') || '#ffffff', imageData: '' };
+      background = { type: bgType, color: bgEl.getAttribute('color') || '#ffffff', imageData: '', videoStartTime: 0, videoAudio: true };
     }
   }
 
@@ -525,6 +542,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       layersSvg += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
       layersSvg += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
       layersSvg += `  </g>\n`;
+    } else if (state.background.type === 'video' && state.videoSnapshot) {
+      layersSvg += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      layersSvg += `    <image href="${state.videoSnapshot}" width="${state.width}" height="${state.height}" />\n`;
+      layersSvg += `  </g>\n`;
     }
 
     // Render layers in reverse order (bottom-up in z-order, matching compositor)
@@ -591,7 +612,7 @@ ${layersSvg}</svg>`;
   height: 1080,
   fps: 24,
   totalFrames: 60,
-  background: { type: 'none', color: '#ffffff', imageData: '' },
+  background: { type: 'none', color: '#ffffff', imageData: '', videoStartTime: 0, videoAudio: true },
 
   clips: [] as MovieClip[],
 
@@ -618,6 +639,7 @@ ${layersSvg}</svg>`;
   canvasContainerHeight: 0,
 
   compositedSvg: '',
+  videoSnapshot: '',
   editingKeyframe: null,
   lastKnownInkscapeState: new Map<string, string>(),
 
@@ -696,7 +718,7 @@ ${layersSvg}</svg>`;
       height: 1080,
       fps: 24,
       totalFrames: 60,
-      background: { type: 'none', color: '#ffffff', imageData: '' },
+      background: { type: 'none', color: '#ffffff', imageData: '', videoStartTime: 0, videoAudio: true },
       clips: [],
       layers: [{
         id: 'layer-1',
@@ -711,6 +733,7 @@ ${layersSvg}</svg>`;
       selectedLayerId: 'layer-1',
       currentFrame: 0,
       compositedSvg: '',
+      videoSnapshot: '',
       editingKeyframe: null,
       lastKnownInkscapeState: new Map(),
       selection: null,
@@ -747,6 +770,7 @@ ${layersSvg}</svg>`;
       selectedLayerId: layers.length > 0 ? layers[0].id : null,
       currentFrame: 0,
       compositedSvg: '',
+      videoSnapshot: '',
       editingKeyframe: null,
       lastKnownInkscapeState: new Map(),
       selection: null,
@@ -1381,6 +1405,7 @@ ${layersSvg}</svg>`;
   setFps: (fps: number) => set({ fps, dirty: true }),
   setTotalFrames: (totalFrames: number) => set({ totalFrames, dirty: true }),
   setBackground: (bg: Partial<BackgroundSettings>) => set((s) => ({ background: { ...s.background, ...bg }, dirty: true })),
+  setVideoSnapshot: (dataUrl: string) => set({ videoSnapshot: dataUrl }),
   setExportPath: (path: string | null) => {
     if (path === get().exportPath) return;
     pushUndo();
@@ -1390,20 +1415,19 @@ ${layersSvg}</svg>`;
   // ── Playback ────────────────────────────────────────────
 
   play: () => {
-    const { playing } = get();
+    const { playing, currentFrame } = get();
     if (playing) return;
     set({ playing: true });
 
-    let lastTime = performance.now();
+    const startTime = performance.now();
+    const startFrame = currentFrame;
     const tick = (now: number) => {
       const state = get();
       if (!state.playing) return;
-      const elapsed = now - lastTime;
-      const frameDuration = 1000 / state.fps;
-      if (elapsed >= frameDuration) {
-        lastTime = now - (elapsed % frameDuration);
-        const nextFrame = (state.currentFrame + 1) % state.totalFrames;
-        set({ currentFrame: nextFrame });
+      const elapsed = now - startTime;
+      const targetFrame = (startFrame + Math.floor(elapsed / (1000 / state.fps))) % state.totalFrames;
+      if (targetFrame !== state.currentFrame) {
+        set({ currentFrame: targetFrame });
         state.recomposite();
       }
       requestAnimationFrame(tick);

@@ -150,7 +150,6 @@ function parseInkscapeStdout(stream) {
   let expecting = null;
 
   stream.on('data', (chunk) => {
-    process.stdout.write(`[ink stdout] ${chunk}`);
     buffer += chunk.toString();
 
     while (true) {
@@ -165,6 +164,7 @@ function parseInkscapeStdout(stream) {
         const openMatch = line.match(/^OPEN (\d+)$/);
         if (openMatch) {
           const id = parseInt(openMatch[1]);
+          process.stdout.write(`[ink stdout] OPEN ${id}`);
           if (pendingOpens.length > 0) {
             const pending = pendingOpens.shift();
             inkscapeWindowForRenderer.set(pending.rendererId, id);
@@ -178,6 +178,7 @@ function parseInkscapeStdout(stream) {
         const closeMatch = line.match(/^CLOSE (\d+)$/);
         if (closeMatch) {
           const id = parseInt(closeMatch[1]);
+          process.stdout.write(`CLOSE ${id}`);
           const rendererId = rendererForInkscapeWindow.get(id);
           if (rendererId !== undefined) {
             inkscapeWindowForRenderer.delete(rendererId);
@@ -194,6 +195,7 @@ function parseInkscapeStdout(stream) {
         const requestSaveMatch = line.match(/^REQUESTSAVE (\d+)$/);
         if (requestSaveMatch) {
           const id = parseInt(requestSaveMatch[1]);
+          process.stdout.write(`[ink stdout] REQUESTSAVE ${id}`);
           const rendererId = rendererForInkscapeWindow.get(id);
           if (rendererId !== undefined) {
             const win = findWindowForRenderer(rendererId);
@@ -205,6 +207,7 @@ function parseInkscapeStdout(stream) {
         // NCLIP <element-id>
         const nclipMatch = line.match(/^NCLIP (.+)$/);
         if (nclipMatch) {
+          process.stdout.write(`[ink stdout] NCLIP`);
           // NCLIP doesn't include a window ID; route to the most recently
           // active renderer that has an Inkscape window open.
           // In practice, NCLIP follows a SAVE which sets `expecting`, so we
@@ -224,6 +227,7 @@ function parseInkscapeStdout(stream) {
         const undoMatch = line.match(/^UNDO (\d+)$/);
         if (undoMatch) {
           const id = parseInt(undoMatch[1]);
+          process.stdout.write(`[ink stdout] UNDO ${id}`);
           const rendererId = rendererForInkscapeWindow.get(id);
           if (rendererId !== undefined) {
             const win = findWindowForRenderer(rendererId);
@@ -236,6 +240,7 @@ function parseInkscapeStdout(stream) {
         const redoMatch = line.match(/^REDO (\d+)$/);
         if (redoMatch) {
           const id = parseInt(redoMatch[1]);
+          process.stdout.write(`[ink stdout] REDO ${id}`);
           const rendererId = rendererForInkscapeWindow.get(id);
           if (rendererId !== undefined) {
             const win = findWindowForRenderer(rendererId);
@@ -247,6 +252,7 @@ function parseInkscapeStdout(stream) {
         // SAVE <id> content-length:<N>
         const saveMatch = line.match(/^SAVE (\d+) content-length:(\d+)$/);
         if (saveMatch) {
+          process.stdout.write(`[ink stdout] SAVE ${saveMatch[1]} content-length:${saveMatch[2]}`);
           expecting = {
             windowId: parseInt(saveMatch[1]),
             contentLength: parseInt(saveMatch[2]),

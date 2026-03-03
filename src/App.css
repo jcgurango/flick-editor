@@ -4,6 +4,12 @@
   flex-direction: column;
   width: 100%;
   height: 100vh;
+  -webkit-touch-callout: none; /* iOS Safari */
+  -webkit-user-select: none; /* Safari */
+  -khtml-user-select: none; /* Konqueror HTML */
+  -moz-user-select: none; /* Firefox */
+  -ms-user-select: none; /* Internet Explorer/Edge */
+  user-select: none; /* Non-prefixed version, currently supported by all modern browsers */
 }
 
 .app-body {
@@ -502,6 +508,7 @@
   border-radius: 3px;
   font-size: 12px;
   text-align: right;
+  appearance: textfield;
   -moz-appearance: textfield;
 }
 

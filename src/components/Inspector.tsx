@@ -96,6 +96,17 @@ export function Inspector({ isClipMode }: { isClipMode: boolean }) {
     setBackground({ imageData: fileUrl });
   };
 
+  const browseBackgroundVideo = async () => {
+    const result = await window.api.showOpenDialog({
+      title: 'Choose background video',
+      filters: [{ name: 'Videos', extensions: ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return;
+    const fileUrl = 'file:///' + result.filePaths[0].replace(/\\/g, '/');
+    setBackground({ imageData: fileUrl });
+  };
+
   const browseInkscape = async () => {
     const result = await window.api.showOpenDialog({
       title: 'Locate Inkscape executable',
@@ -130,6 +141,7 @@ export function Inspector({ isClipMode }: { isClipMode: boolean }) {
             <option value="none">None</option>
             <option value="solid">Solid Color</option>
             <option value="image">Image</option>
+            <option value="video">Video</option>
           </select>
         </div>
         {background.type === 'solid' && (
@@ -155,6 +167,46 @@ export function Inspector({ isClipMode }: { isClipMode: boolean }) {
               </button>
             </div>
           </div>
+        )}
+        {background.type === 'video' && (
+          <>
+            <div className="inspector-field-col">
+              <label>Video</label>
+              <div className="inspector-path-row">
+                <span className="inspector-path-value">
+                  {background.imageData ? background.imageData.split('/').pop() : '(none)'}
+                </span>
+                <button className="inspector-browse-btn" onClick={browseBackgroundVideo}>
+                  ...
+                </button>
+              </div>
+            </div>
+            <div className="inspector-field">
+              <label>Start (s)</label>
+              <input
+                className="inspector-input"
+                type="number"
+                min={0}
+                step={0.1}
+                value={background.videoStartTime}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v) && v >= 0) setBackground({ videoStartTime: v });
+                }}
+              />
+            </div>
+            <div className="inspector-field">
+              <label>Audio</label>
+              <select
+                className="inspector-select"
+                value={background.videoAudio ? 'yes' : 'no'}
+                onChange={(e) => setBackground({ videoAudio: e.target.value === 'yes' })}
+              >
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+          </>
         )}
       </div>
 
