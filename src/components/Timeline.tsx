@@ -192,12 +192,8 @@ export function Timeline() {
 
   // ── Double-click to edit ────────────────────────────────
 
-  const handleDoubleClickCell = (layerId: string, frame: number) => {
-    const layer = layers.find((l) => l.id === layerId);
-    if (!layer) return;
-    if (layer.keyframes.some((kf) => kf.frame === frame)) {
-      startEditing(layerId, frame);
-    }
+  const handleDoubleClickCell = (_layerId: string, frame: number) => {
+    startEditing(frame);
   };
 
   // ── Keyframe helpers ────────────────────────────────────

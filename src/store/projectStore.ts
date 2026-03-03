@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { compositeFrame, renderLayer } from '../lib/compositor';
+import { normalizeSvgForDiff } from '../lib/svg-diff';
 
 // ── Clip Mode Detection ───────────────────────────────────
 
@@ -53,7 +54,6 @@ export interface UndoSnapshot {
 }
 
 export interface EditingState {
-  layerId: string;
   frame: number;
 }
 
@@ -122,6 +122,7 @@ export interface ProjectState extends MovieClip {
 
   // Inkscape editing state
   editingKeyframe: EditingState | null;
+  lastKnownInkscapeState: Map<string, string>;
 
   // Undo/redo
   undoStack: UndoSnapshot[];
@@ -168,7 +169,7 @@ export interface ProjectState extends MovieClip {
 
   // ── Inkscape editing ──────────────────────────────────
 
-  startEditing: (layerId: string, frame: number) => Promise<void>;
+  startEditing: (frame: number) => Promise<void>;
   handleInkscapeSave: (svgContent: string) => Promise<void>;
   reloadInkscapeDocument: () => Promise<void>;
 
@@ -451,12 +452,6 @@ function parseFlickXml(xmlString: string): {
   return { width, height, fps, totalFrames, background, layers, clips, exportPath };
 }
 
-/** Extract inner content from an SVG string (everything inside the root <svg> tag) */
-function extractSvgInnerContent(svgString: string): string {
-  const match = svgString.match(/<svg[^>]*>([\s\S]*)<\/svg>/i);
-  return match ? match[1].trim() : '';
-}
-
 /** Compute bounding box of a group element within an SVG string */
 function computeGroupBBox(fullSvgContent: string, groupId: string):
   { x: number; y: number; width: number; height: number } | null {
@@ -507,6 +502,68 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     }
   }
 
+  /**
+   * Build the multi-layer SVG document for Inkscape editing.
+   * All layers are sent as real Inkscape layers. Layers with a keyframe at
+   * the given frame are unlocked; others are locked (sodipodi:insensitive).
+   * Returns the SVG string, filename, and a map of layer content for diffing.
+   */
+  function buildEditingSvg(state: ProjectState, frame: number) {
+    const knownState = new Map<string, string>();
+
+    let layersSvg = '';
+
+    // Background context layer (bottommost, always locked)
+    if (state.background.type === 'solid') {
+      layersSvg += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      layersSvg += `    <rect width="${state.width}" height="${state.height}" fill="${state.background.color}" />\n`;
+      layersSvg += `  </g>\n`;
+    } else if (state.background.type === 'image' && state.background.imageData) {
+      layersSvg += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
+      layersSvg += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
+      layersSvg += `  </g>\n`;
+    }
+
+    // Render layers in reverse order (bottom-up in z-order, matching compositor)
+    for (let i = state.layers.length - 1; i >= 0; i--) {
+      const layer = state.layers[i];
+      if (!layer.viewportVisible) continue;
+
+      const hasKeyframeAtFrame = layer.keyframes.some((kf) => kf.frame === frame);
+
+      // Render the layer's interpolated content at this frame
+      // Clip references are NOT resolved here — they stay as <image data-flick-clip="...">
+      // with base64 hrefs already embedded. syncClipsToInkscape handles clip panel registration.
+      const inner = renderLayer(layer, frame, state.totalFrames);
+
+      const locked = !hasKeyframeAtFrame;
+      const lockAttr = locked ? ' sodipodi:insensitive="true"' : '';
+      layersSvg += `  <g inkscape:groupmode="layer" inkscape:label="${layer.id}"${lockAttr}>\n`;
+      layersSvg += inner ? `    ${inner}\n` : '';
+      layersSvg += `  </g>\n`;
+
+      // Store the content for diffing (normalize what we sent)
+      const layerSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${inner ? inner.trim() : ''}\n</svg>`;
+      const normalizedSent = normalizeSvgForDiff(layerSvg);
+      knownState.set(layer.id, normalizedSent);
+
+
+    }
+
+    const flickName = state.projectPath ? state.projectPath.split(/[\\/]/).pop()! : 'Untitled Flick Project';
+    const inkscapeFilename = `${flickName}-${String(frame).padStart(3, '0')}`;
+
+    const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+     width="${state.width}" height="${state.height}"
+     viewBox="0 0 ${state.width} ${state.height}">
+${layersSvg}</svg>`;
+
+    return { workingSvg, inkscapeFilename, knownState };
+  }
+
   /** Clean up Inkscape listeners and clear editing state */
   function clearEditing() {
     const state = get();
@@ -517,7 +574,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       if (cleanup) cleanup();
     }
 
-    set({ editingKeyframe: null });
+    set({ editingKeyframe: null, lastKnownInkscapeState: new Map() });
   }
 
   return {
@@ -559,6 +616,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   compositedSvg: '',
   editingKeyframe: null,
+  lastKnownInkscapeState: new Map<string, string>(),
 
   undoStack: [],
   redoStack: [],
@@ -651,6 +709,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       currentFrame: 0,
       compositedSvg: '',
       editingKeyframe: null,
+      lastKnownInkscapeState: new Map(),
       selection: null,
       clipboard: null,
       undoStack: [],
@@ -686,6 +745,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       currentFrame: 0,
       compositedSvg: '',
       editingKeyframe: null,
+      lastKnownInkscapeState: new Map(),
       selection: null,
       clipboard: null,
       undoStack: [],
@@ -1080,49 +1140,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     if (!state.editingKeyframe) return;
     const api = window.api;
 
-    const { layerId, frame } = state.editingKeyframe;
-    const layer = state.layers.find((l) => l.id === layerId);
-    if (!layer) return;
+    const { frame } = state.editingKeyframe;
+    const { workingSvg, inkscapeFilename, knownState } = buildEditingSvg(state, frame);
 
-    const kf = layer.keyframes.find((k) => k.frame === frame);
-    if (!kf) return;
-
-    const editableContent = extractSvgInnerContent(kf.svgContent);
-
-    let contextLayers = '';
-
-    if (state.background.type === 'solid') {
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <rect width="${state.width}" height="${state.height}" fill="${state.background.color}" />\n`;
-      contextLayers += `  </g>\n`;
-    } else if (state.background.type === 'image' && state.background.imageData) {
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
-      contextLayers += `  </g>\n`;
-    }
-
-    for (const otherLayer of state.layers) {
-      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
-      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
-      if (!nearestKf) continue;
-      const b64 = btoa(nearestKf.svgContent);
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${otherLayer.id}" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="data:image/svg+xml;base64,${b64}" width="${state.width}" height="${state.height}" />\n`;
-      contextLayers += `  </g>\n`;
-    }
-
-    const flickName = state.projectPath ? state.projectPath.split(/[\\/]/).pop()! : 'Untitled Flick Project';
-    const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
-
-    const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-     width="${state.width}" height="${state.height}"
-     viewBox="0 0 ${state.width} ${state.height}">
-${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
-${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
-</svg>`;
+    set({ lastKnownInkscapeState: knownState });
 
     try {
       await api.inkscapeLoad(inkscapeFilename, workingSvg);
@@ -1133,15 +1154,9 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
 
   // ── Inkscape editing (pipe mode) ─────────────────────────
 
-  startEditing: async (layerId: string, frame: number) => {
+  startEditing: async (frame: number) => {
     const state = get();
     const api = window.api;
-
-    const layer = state.layers.find((l) => l.id === layerId);
-    if (!layer) return;
-
-    const kf = layer.keyframes.find((k) => k.frame === frame);
-    if (!kf) return;
 
     // Stop playback before editing
     if (state.playing) get().stop();
@@ -1151,43 +1166,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       clearEditing();
     }
 
-    const editableContent = extractSvgInnerContent(kf.svgContent);
-
-    let contextLayers = '';
-
-    // Background context layer (bottommost)
-    if (state.background.type === 'solid') {
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <rect width="${state.width}" height="${state.height}" fill="${state.background.color}" />\n`;
-      contextLayers += `  </g>\n`;
-    } else if (state.background.type === 'image' && state.background.imageData) {
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] background" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="${state.background.imageData}" width="${state.width}" height="${state.height}" />\n`;
-      contextLayers += `  </g>\n`;
-    }
-
-    for (const otherLayer of state.layers) {
-      if (otherLayer.id === layerId || !otherLayer.viewportVisible) continue;
-      const nearestKf = findNearestKeyframe(otherLayer.keyframes, frame);
-      if (!nearestKf) continue;
-      const b64 = btoa(nearestKf.svgContent);
-      contextLayers += `  <g inkscape:groupmode="layer" inkscape:label="[ctx] ${otherLayer.id}" sodipodi:insensitive="true">\n`;
-      contextLayers += `    <image href="data:image/svg+xml;base64,${b64}" width="${state.width}" height="${state.height}" />\n`;
-      contextLayers += `  </g>\n`;
-    }
-
-    const flickName = state.projectPath ? state.projectPath.split(/[\\/]/).pop()! : 'Untitled Flick Project';
-    const inkscapeFilename = `${flickName}-${layerId}-${String(frame).padStart(3, '0')}`;
-
-    const workingSvg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-     width="${state.width}" height="${state.height}"
-     viewBox="0 0 ${state.width} ${state.height}">
-${contextLayers}  <g inkscape:groupmode="layer" inkscape:label="${layer.id}">
-${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
-</svg>`;
+    const { workingSvg, inkscapeFilename, knownState } = buildEditingSvg(state, frame);
 
     // Set up pipe-mode listeners
     const saveCleanup = api.onInkscapeSaved((_filename: string, svgContent: string) => {
@@ -1221,7 +1200,8 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     (get() as any)._requestSaveCleanup = requestSaveCleanup;
 
     set({
-      editingKeyframe: { layerId, frame },
+      editingKeyframe: { frame },
+      lastKnownInkscapeState: knownState,
     });
 
     try {
@@ -1236,9 +1216,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     const state = get();
     if (!state.editingKeyframe) return;
 
-    pushUndo();
-
-    const { layerId, frame } = state.editingKeyframe;
+    const { frame } = state.editingKeyframe;
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
     const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -1268,7 +1246,7 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       p.parentNode?.removeChild(p);
     }
 
-    // Remove [ctx] layers
+    // Remove [ctx] background layer
     for (const g of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'g'))) {
       const label = g.getAttributeNS(INKSCAPE_NS, 'label');
       if (label && label.startsWith('[ctx]')) {
@@ -1283,33 +1261,79 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
         defsContent += serializeChildren(defs);
       }
     }
+    const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
 
-    // Find the editable layer group and extract its content
-    let innerContent = '';
+    // Extract content from each Inkscape layer and diff against known state
+    const newKnownState = new Map(state.lastKnownInkscapeState);
+    let anyChanged = false;
+    let updatedLayers = state.layers;
+
     for (const g of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'g'))) {
-      if (g.getAttributeNS(INKSCAPE_NS, 'groupmode') === 'layer') {
-        innerContent = serializeChildren(g);
-        break;
+      if (g.getAttributeNS(INKSCAPE_NS, 'groupmode') !== 'layer') continue;
+      const layerId = g.getAttributeNS(INKSCAPE_NS, 'label');
+      if (!layerId || layerId.startsWith('[ctx]')) continue;
+
+      const innerContent = serializeChildren(g);
+      const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsBlock}${innerContent.trim()}\n</svg>`;
+
+      // Normalize and compare against what Inkscape had before
+      const normalized = normalizeSvgForDiff(cleanSvg);
+      const previousNormalized = state.lastKnownInkscapeState.get(layerId) || '';
+
+      if (normalized === previousNormalized) {
+        // Unchanged — skip
+        continue;
+      }
+
+      anyChanged = true;
+      newKnownState.set(layerId, normalized);
+
+      const layer = updatedLayers.find((l) => l.id === layerId);
+      if (!layer) continue;
+
+      const existingKf = layer.keyframes.find((kf) => kf.frame === frame);
+
+      if (existingKf) {
+        // Update existing keyframe
+        updatedLayers = updatedLayers.map((l) => {
+          if (l.id !== layerId) return l;
+          return {
+            ...l,
+            keyframes: l.keyframes.map((kf) =>
+              kf.frame === frame ? { ...kf, svgContent: cleanSvg } : kf
+            ),
+          };
+        });
+      } else {
+        // Create new keyframe — inherit tween/easing from nearest prior keyframe
+        const nearest = findNearestKeyframe(layer.keyframes, frame);
+        const newKf: Keyframe = {
+          frame,
+          svgContent: cleanSvg,
+          tween: nearest?.tween || 'linear',
+          easing: nearest?.easing || 'in-out',
+        };
+        updatedLayers = updatedLayers.map((l) => {
+          if (l.id !== layerId) return l;
+          const kfs = [...l.keyframes, newKf].sort((a, b) => a.frame - b.frame);
+          return { ...l, keyframes: kfs };
+        });
       }
     }
 
-    const defsBlock = defsContent.trim() ? `<defs>${defsContent.trim()}</defs>\n` : '';
-    const cleanSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">\n${defsBlock}${innerContent.trim()}\n</svg>`;
+    if (anyChanged) {
+      pushUndo();
+      set({ dirty: true, layers: updatedLayers });
+      // Rebuild known state from the updated layers so staleness check
+      // in recomposite sees the same normalized content we'd send now
+      const { knownState: freshKnown } = buildEditingSvg(get(), frame);
+      set({ lastKnownInkscapeState: freshKnown });
+      get().recomposite();
+    } else {
+      // Even if nothing changed visually, update the known state
+      set({ lastKnownInkscapeState: newKnownState });
+    }
 
-    set({ dirty: true });
-    set((s) => ({
-      layers: s.layers.map((l) => {
-        if (l.id !== layerId) return l;
-        return {
-          ...l,
-          keyframes: l.keyframes.map((kf) =>
-            kf.frame === frame ? { ...kf, svgContent: cleanSvg } : kf
-          ),
-        };
-      }),
-    }));
-
-    get().recomposite();
     window.api.inkscapeDirty();
   },
 
@@ -1384,11 +1408,21 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
     if (!state.editingKeyframe) return;
     const api = window.api;
 
-    const { layerId, frame } = state.editingKeyframe;
-    const layer = state.layers.find((l) => l.id === layerId);
-    if (!layer) return;
-    const kf = layer.keyframes.find((k) => k.frame === frame);
-    if (!kf) return;
+    const { frame } = state.editingKeyframe;
+
+    // Find which layer contains the element with this ID
+    let layerId: string | null = null;
+    let kf: Keyframe | null = null;
+    for (const layer of state.layers) {
+      const candidate = layer.keyframes.find((k) => k.frame === frame);
+      if (!candidate) continue;
+      if (candidate.svgContent.includes(`id="${elementId}"`)) {
+        layerId = layer.id;
+        kf = candidate;
+        break;
+      }
+    }
+    if (!layerId || !kf) return;
 
     // Compute bounding box
     const bbox = computeGroupBBox(kf.svgContent, elementId);
@@ -1602,11 +1636,31 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
   // ── Compositor ──────────────────────────────────────────
 
   recomposite: () => {
-    const { layers, currentFrame, width, height, totalFrames, clips, editingKeyframe } = get();
+    const { layers, currentFrame, width, height, totalFrames, clips, editingKeyframe, lastKnownInkscapeState } = get();
     const combined = compositeFrame(layers, currentFrame, width, height, 'viewport', totalFrames, clips);
     set({ compositedSvg: combined });
-    if (editingKeyframe && clips.length > 0) {
-      get().syncClipsToInkscape();
+
+    if (editingKeyframe) {
+      if (clips.length > 0) {
+        get().syncClipsToInkscape();
+      }
+
+      // Staleness detection: rebuild what we'd send to Inkscape now
+      // and compare against what Inkscape currently has
+      if (lastKnownInkscapeState.size > 0) {
+        const { knownState: freshState } = buildEditingSvg(get(), editingKeyframe.frame);
+        let stale = false;
+        for (const [layerId, freshNorm] of freshState) {
+          const known = lastKnownInkscapeState.get(layerId) || '';
+          if (known && freshNorm !== known) {
+            stale = true;
+            break;
+          }
+        }
+        if (stale) {
+          get().reloadInkscapeDocument();
+        }
+      }
     }
   },
 };

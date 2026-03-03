@@ -128,7 +128,7 @@ function findClipLoopStart(keyframes: Keyframe[], currentFrame: number, clipId: 
  * Resolve <image data-flick-clip="..."> placeholders in SVG content
  * by recursively compositing the referenced clips.
  */
-function resolveClipReferences(
+export function resolveClipReferences(
   svgInner: string,
   clips: MovieClip[],
   layer: AnimationLayer,

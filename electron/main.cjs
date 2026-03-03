@@ -344,7 +344,7 @@ function openInkscapeWindow(rendererId) {
   return new Promise((resolve) => {
     pendingOpens.push({ rendererId, resolve });
     console.log('[ink stdin] OPEN');
-    inkscapeProc.stdin.write('OPEN\n');
+    inkscapeProc.stdin.write('OPEN freeze-top\n');
   });
 }
 
