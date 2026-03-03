@@ -1263,6 +1263,11 @@ ${editableContent ? '    ' + editableContent + '\n' : ''}  </g>
       nv.parentNode?.removeChild(nv);
     }
 
+    // Remove inkscape:perspective (auto-generated on every open)
+    for (const p of Array.from(doc.getElementsByTagNameNS(INKSCAPE_NS, 'perspective'))) {
+      p.parentNode?.removeChild(p);
+    }
+
     // Remove [ctx] layers
     for (const g of Array.from(doc.getElementsByTagNameNS(SVG_NS, 'g'))) {
       const label = g.getAttributeNS(INKSCAPE_NS, 'label');

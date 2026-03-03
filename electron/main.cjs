@@ -362,7 +362,6 @@ ipcMain.handle('inkscape:load', async (_event, filename, svgData) => {
   const buf = Buffer.from(svgData, 'utf-8');
   const header = `LOAD ${inkId} content-length:${buf.length}\n${filename}\n`;
   console.log(`[ink stdin] LOAD ${inkId} content-length:${buf.length} filename:${filename}`);
-  console.log(`[ink stdin] ${svgData}`);
   inkscapeProc.stdin.write(header);
   inkscapeProc.stdin.write(buf);
 });
