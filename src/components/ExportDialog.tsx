@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { exportFrame } from '../lib/compositor';
-
-type ExportFormat = 'svg' | 'png';
+import type { ExportFormat } from '../store/projectStore';
 
 interface ExportDialogProps {
   onClose: () => void;
@@ -74,33 +73,18 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const setExportPath = useProjectStore((s) => s.setExportPath);
   const clips = useProjectStore((s) => s.clips);
 
-  const [format, setFormat] = useState<ExportFormat>('svg');
-  const [renderBg, setRenderBg] = useState(true);
-  const [exportWidth, setExportWidth] = useState('');
-  const [exportHeight, setExportHeight] = useState('');
+  const format = useProjectStore((s) => s.exportFormat);
+  const setFormat = useProjectStore((s) => s.setExportFormat);
+  const renderBg = useProjectStore((s) => s.exportRenderBg);
+  const setRenderBg = useProjectStore((s) => s.setExportRenderBg);
+  const storeExportWidth = useProjectStore((s) => s.exportWidth);
+  const setStoreExportWidth = useProjectStore((s) => s.setExportWidth);
+  const storeExportHeight = useProjectStore((s) => s.exportHeight);
+  const setStoreExportHeight = useProjectStore((s) => s.setExportHeight);
+
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const cancelRef = useRef(false);
-
-  // Load saved export settings from config
-  useEffect(() => {
-    window.api.getConfig('exportSettings').then((val: any) => {
-      if (!val) return;
-      if (val.format) setFormat(val.format);
-      if (val.renderBg !== undefined) setRenderBg(val.renderBg);
-      if (val.exportWidth) setExportWidth(val.exportWidth);
-      if (val.exportHeight) setExportHeight(val.exportHeight);
-    });
-  }, []);
-
-  const saveSettings = async () => {
-    await window.api.setConfig('exportSettings', {
-      format,
-      renderBg,
-      exportWidth,
-      exportHeight,
-    });
-  };
 
   const handleBrowse = async () => {
     const result = await window.api.showOpenDialog({
@@ -115,15 +99,14 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
   const handleExport = async () => {
     if (!exportPath) return;
 
-    await saveSettings();
     await window.api.mkdir(exportPath);
 
     setExporting(true);
     setProgress(0);
     cancelRef.current = false;
 
-    const ew = exportWidth ? parseInt(exportWidth, 10) : undefined;
-    const eh = exportHeight ? parseInt(exportHeight, 10) : undefined;
+    const ew = storeExportWidth ?? undefined;
+    const eh = storeExportHeight ?? undefined;
     const bg = renderBg ? background : null;
     const outW = ew || width;
     const outH = eh || height;
@@ -221,8 +204,11 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
             <label>Width</label>
             <input
               type="number"
-              value={exportWidth}
-              onChange={(e) => setExportWidth(e.target.value)}
+              value={storeExportWidth ?? ''}
+              onChange={(e) => {
+                const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                setStoreExportWidth(v !== null && !isNaN(v) ? v : null);
+              }}
               placeholder={String(width)}
               disabled={exporting}
             />
@@ -231,8 +217,11 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
             <label>Height</label>
             <input
               type="number"
-              value={exportHeight}
-              onChange={(e) => setExportHeight(e.target.value)}
+              value={storeExportHeight ?? ''}
+              onChange={(e) => {
+                const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                setStoreExportHeight(v !== null && !isNaN(v) ? v : null);
+              }}
               placeholder={String(height)}
               disabled={exporting}
             />

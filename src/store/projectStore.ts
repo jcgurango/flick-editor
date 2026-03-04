@@ -14,6 +14,8 @@ export type TweenType = 'discrete' | 'linear' | 'quadratic' | 'cubic'
   | 'exponential' | 'circular' | 'elastic' | 'bounce';
 export type EasingDirection = 'in' | 'out' | 'in-out';
 
+export type ExportFormat = 'svg' | 'png';
+
 export type BackgroundType = 'none' | 'solid' | 'image' | 'video';
 export interface BackgroundSettings {
   type: BackgroundType;
@@ -96,6 +98,10 @@ export interface ProjectState extends MovieClip {
   // Project metadata
   projectPath: string | null;
   exportPath: string | null;
+  exportFormat: ExportFormat;
+  exportRenderBg: boolean;
+  exportWidth: number | null;   // null = use project width
+  exportHeight: number | null;  // null = use project height
   dirty: boolean;
 
   // Project settings
@@ -194,6 +200,10 @@ export interface ProjectState extends MovieClip {
   setBackground: (bg: Partial<BackgroundSettings>) => void;
   setVideoSnapshot: (dataUrl: string) => void;
   setExportPath: (path: string | null) => void;
+  setExportFormat: (format: ExportFormat) => void;
+  setExportRenderBg: (renderBg: boolean) => void;
+  setExportWidth: (width: number | null) => void;
+  setExportHeight: (height: number | null) => void;
 
   // ── Undo/Redo ─────────────────────────────────────────
 
@@ -364,9 +374,19 @@ function buildFlickXml(state: {
   background: BackgroundSettings;
   clips: MovieClip[];
   exportPath: string | null;
+  exportFormat: ExportFormat;
+  exportRenderBg: boolean;
+  exportWidth: number | null;
+  exportHeight: number | null;
 }): string {
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
   xml += `<flick version="1" width="${state.width}" height="${state.height}" fps="${state.fps}" frames="${state.totalFrames}"${state.exportPath ? ` export-path="${escXml(state.exportPath)}"` : ''}>\n`;
+
+  // Export settings
+  xml += `  <export format="${state.exportFormat}" render-bg="${state.exportRenderBg}"`;
+  if (state.exportWidth != null) xml += ` width="${state.exportWidth}"`;
+  if (state.exportHeight != null) xml += ` height="${state.exportHeight}"`;
+  xml += `/>\n`;
 
   if (state.background.type === 'image' && state.background.imageData) {
     xml += `  <background type="image"><image-data><![CDATA[${state.background.imageData}]]></image-data></background>\n`;
@@ -434,6 +454,10 @@ function parseFlickXml(xmlString: string): {
   layers: AnimationLayer[];
   clips: MovieClip[];
   exportPath: string | null;
+  exportFormat: ExportFormat;
+  exportRenderBg: boolean;
+  exportWidth: number | null;
+  exportHeight: number | null;
 } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlString, 'application/xml');
@@ -444,6 +468,15 @@ function parseFlickXml(xmlString: string): {
   const fps = Number(root.getAttribute('fps'));
   const totalFrames = Number(root.getAttribute('frames'));
   const exportPath = root.getAttribute('export-path') || null;
+
+  // Export settings
+  const exportEl = root.querySelector(':scope > export');
+  const exportFormat = ((exportEl?.getAttribute('format') || 'svg') as ExportFormat);
+  const exportRenderBg = exportEl ? exportEl.getAttribute('render-bg') !== 'false' : true;
+  const rawExW = exportEl?.getAttribute('width');
+  const rawExH = exportEl?.getAttribute('height');
+  const exportWidth = rawExW ? Number(rawExW) : null;
+  const exportHeight = rawExH ? Number(rawExH) : null;
 
   // Background
   const bgEl = root.querySelector('background');
@@ -487,7 +520,7 @@ function parseFlickXml(xmlString: string): {
   // Layers (direct children of root, not inside clips)
   const layers = parseLayersXml(root, serializer);
 
-  return { width, height, fps, totalFrames, background, layers, clips, exportPath };
+  return { width, height, fps, totalFrames, background, layers, clips, exportPath, exportFormat, exportRenderBg, exportWidth, exportHeight };
 }
 
 const CLIP_PADDING = 20;
@@ -627,6 +660,10 @@ ${layersSvg}</svg>`;
   name: 'Untitled',
   projectPath: null,
   exportPath: null,
+  exportFormat: 'svg' as ExportFormat,
+  exportRenderBg: true,
+  exportWidth: null,
+  exportHeight: null,
   dirty: false,
 
   width: 1920,
@@ -734,6 +771,10 @@ ${layersSvg}</svg>`;
       name: 'Untitled',
       projectPath: null,
       exportPath: null,
+      exportFormat: 'svg' as ExportFormat,
+      exportRenderBg: true,
+      exportWidth: null,
+      exportHeight: null,
       dirty: false,
       width: 1920,
       height: 1080,
@@ -780,6 +821,10 @@ ${layersSvg}</svg>`;
     set({
       projectPath: filePath,
       exportPath: parsed.exportPath,
+      exportFormat: parsed.exportFormat,
+      exportRenderBg: parsed.exportRenderBg,
+      exportWidth: parsed.exportWidth,
+      exportHeight: parsed.exportHeight,
       dirty: false,
       width: parsed.width,
       height: parsed.height,
@@ -1432,6 +1477,10 @@ ${layersSvg}</svg>`;
     pushUndo();
     set({ exportPath: path, dirty: true });
   },
+  setExportFormat: (format: ExportFormat) => set({ exportFormat: format, dirty: true }),
+  setExportRenderBg: (renderBg: boolean) => set({ exportRenderBg: renderBg, dirty: true }),
+  setExportWidth: (width: number | null) => set({ exportWidth: width, dirty: true }),
+  setExportHeight: (height: number | null) => set({ exportHeight: height, dirty: true }),
 
   // ── Playback ────────────────────────────────────────────
 
