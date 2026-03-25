@@ -274,5 +274,9 @@ export function exportFrame(
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${width} ${height}">\n${bgContent}${inner}</svg>`;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${width} ${height}">\n${bgContent}${inner}</svg>`;
+  // Strip Inkscape-specific sodipodi/inkscape namespace declarations and attributes — they are invalid XML when the namespace URI is empty
+  svg = svg.replace(/\s+xmlns:(sodipodi|inkscape)="[^"]*"/g, '');
+  svg = svg.replace(/\s+(sodipodi|inkscape):\w+="[^"]*"/g, '');
+  return svg;
 }

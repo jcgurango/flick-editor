@@ -55,6 +55,7 @@ function rasterizeSvgToPngBase64(svg: string, w: number, h: number): Promise<str
       resolve(dataUrl.replace('data:image/png;base64,', ''));
     };
     img.onerror = () => {
+      console.log(svg);
       URL.revokeObjectURL(url);
       reject(new Error('Failed to load SVG for rasterization'));
     };
